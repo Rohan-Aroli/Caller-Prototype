@@ -4,23 +4,22 @@ This is the backend component of an AI calling platform, starting with a CSV ing
 
 ## Setup
 
-1. Create a virtual environment and activate it:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-   ```
+To set up the project (create a virtual environment and install dependencies), simply run the setup script:
 
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+python scripts/setup.py
+```
 
 ## Running the application
 
 To run the backend server using `uvicorn`:
 
 ```bash
-uvicorn backend.app.main:app --reload
+# On Linux/macOS:
+.venv/bin/uvicorn backend.app.main:app --reload
+
+# On Windows:
+.venv\Scripts\uvicorn backend.app.main:app --reload
 ```
 
 The API will be available at `http://localhost:8000`.
@@ -36,5 +35,10 @@ FastAPI provides automatic API documentation:
 To run the automated tests, simply execute:
 
 ```bash
-pytest backend/tests/
+# On Linux/macOS:
+PYTHONPATH=$(pwd) .venv/bin/pytest backend/tests/
+
+# On Windows:
+set PYTHONPATH=%cd%
+.venv\Scripts\pytest backend/tests/
 ```
