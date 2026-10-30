@@ -1,6 +1,6 @@
 # AI Calling Platform - CSV Lead Upload
 
-This is the backend component of an AI calling platform, starting with a CSV ingestion endpoint.
+This is the backend component of an AI calling platform, featuring a resilient, high-throughput CSV lead ingestion and validation pipeline.
 
 ## Setup
 
@@ -24,21 +24,20 @@ To run the backend server using `uvicorn`:
 
 The API will be available at `http://localhost:8000`.
 
-## API Documentation
+## API Documentation & Health Check
 
-FastAPI provides automatic API documentation:
+- Health Check: `http://localhost:8000/health`
 - Swagger UI: `http://localhost:8000/docs`
 - ReDoc: `http://localhost:8000/redoc`
 
 ## Running Tests
 
-To run the automated tests, simply execute:
+To run the automated tests (`pytest.ini` automatically configures module resolution):
 
 ```bash
 # On Linux/macOS:
-PYTHONPATH=$(pwd) .venv/bin/pytest backend/tests/
+.venv/bin/pytest
 
 # On Windows:
-set PYTHONPATH=%cd%
-.venv\Scripts\pytest backend/tests/
+.venv\Scripts\pytest
 ```
