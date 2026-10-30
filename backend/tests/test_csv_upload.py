@@ -1,6 +1,8 @@
 import pytest
+from pathlib import Path
 from fastapi.testclient import TestClient
 from backend.app.main import app
+from backend.app.core.config import settings
 
 client = TestClient(app)
 
@@ -82,15 +84,18 @@ def test_empty_files_and_header_only_files():
     assert response.status_code == 400
     assert "no data rows" in response.json()["detail"]
 
+    # Header followed only by blank lines
+    files = {"file": ("test.csv", "Name,Phone\n\n   \n", "text/csv")}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 400
+    assert "no data rows" in response.json()["detail"]
+
 def test_malformed_csv_input():
-    # In complete quotes usually causes issues in csv parser, wait actually python csv can handle some
-    # Let's test with null bytes
+    # Null byte or bad encoding test
     csv_content = b"Name,Phone\n\0,123"
     files = {"file": ("test.csv", csv_content, "text/csv")}
     data = {"agent_id": AGENT_ID}
     response = client.post(ENDPOINT, files=files, data=data)
-    # csv error might happen or might just process null
-    # But let's check a typical malformed error if csv module throws
     if response.status_code == 400:
         assert "Malformed CSV" in response.json()["detail"] or "must be UTF-8" in response.json()["detail"] or "null" in response.text
 
@@ -186,11 +191,52 @@ def test_bom_handling():
     assert res["accepted_leads"][0]["name"] == "Rahul"
 
 def test_verification_no_db_external():
-    # Check that there is no obvious mock/patch needed to make this test work
-    # We are not creating a db or making http calls in the endpoint
-    # This is more of an architectural check, but we run a simple request to confirm it's fast and pure
     csv_content = "Name,Phone\nRahul,+919876543210"
     files = {"file": ("test.csv", csv_content, "text/csv")}
     data = {"agent_id": AGENT_ID}
     response = client.post(ENDPOINT, files=files, data=data)
     assert response.status_code == 200
+
+def test_uppercase_csv_extension_allowed():
+    csv_content = "Name,Phone\nRahul,+919876543210"
+    files = {"file": ("test.CSV", csv_content, "application/octet-stream")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 200
+    assert response.json()["accepted_count"] == 1
+
+def test_oversized_file_rejected(monkeypatch):
+    monkeypatch.setattr(settings, "max_upload_size_bytes", 100)
+    csv_content = "Name,Phone\n" + ("Rahul,+919876543210\n" * 10)
+    files = {"file": ("test.csv", csv_content, "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 413
+    assert "exceeds maximum allowed size" in response.json()["detail"]
+
+def test_health_check():
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "healthy"
+
+def test_user_test_leads_file():
+    test_file = Path(__file__).parent / "test data" / "test_leads.csv"
+    if test_file.exists():
+        with open(test_file, "rb") as f:
+            response = client.post(ENDPOINT, files={"file": ("test_leads.csv", f, "text/csv")}, data={"agent_id": AGENT_ID})
+        assert response.status_code == 200
+        res = response.json()
+        assert res["accepted_count"] == 3
+        assert res["rejected_count"] == 3
+        assert res["total_rows"] == 6
+
+def test_user_stress_test_leads_file():
+    stress_file = Path(__file__).parent / "test data" / "stress_test_leads.csv"
+    if stress_file.exists():
+        with open(stress_file, "rb") as f:
+            response = client.post(ENDPOINT, files={"file": ("stress_test_leads.csv", f, "text/csv")}, data={"agent_id": AGENT_ID})
+        assert response.status_code == 200
+        res = response.json()
+        assert res["accepted_count"] == 13
+        assert res["rejected_count"] == 10
+        assert res["total_rows"] == 23

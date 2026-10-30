@@ -1,23 +1,34 @@
 import csv
 import re
-from typing import TextIO, List, Tuple
+import sys
+from typing import TextIO, List
 from fastapi import HTTPException
 from backend.app.schemas.leads import CsvProcessingResponse, AcceptedLead, RejectedRow
 
 REQUIRED_HEADERS = {"name", "phone"}
 
+# Pre-compiled regular expressions for maximum row-processing throughput
+RE_PHONE_STRIP = re.compile(r'[\s\-\(\)\.]')
+RE_E164 = re.compile(r'^\+[1-9]\d{7,14}$')
+
+# Increase CSV field size limit to handle large freeform values safely
+try:
+    csv.field_size_limit(sys.maxsize)
+except OverflowError:
+    csv.field_size_limit(2147483647)
+
 def normalize_header(header: str) -> str:
     return header.strip().lower().replace(" ", "_")
 
 def normalize_phone(phone: str) -> str:
-    phone = re.sub(r'[\s\-\(\)\.]', '', phone)
+    phone = RE_PHONE_STRIP.sub('', phone)
     if phone.startswith("00"):
         phone = "+" + phone[2:]
     return phone
 
 def is_valid_phone(phone: str) -> bool:
     # E.164: + followed by 8-15 digits, first digit non-zero
-    return bool(re.match(r'^\+[1-9]\d{7,14}$', phone))
+    return bool(RE_E164.match(phone))
 
 def process_csv(file_obj: TextIO, agent_id: str) -> CsvProcessingResponse:
     try:
@@ -95,7 +106,7 @@ def process_csv(file_obj: TextIO, agent_id: str) -> CsvProcessingResponse:
                     )
                 )
 
-        if row_number == 1: # Only header was read
+        if len(accepted_leads) + len(rejected_rows) == 0:
             raise HTTPException(status_code=400, detail="File contains no data rows.")
 
         return CsvProcessingResponse(
@@ -108,5 +119,7 @@ def process_csv(file_obj: TextIO, agent_id: str) -> CsvProcessingResponse:
             rejected_rows=rejected_rows
         )
 
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
     except csv.Error as e:
         raise HTTPException(status_code=400, detail=f"Malformed CSV: {str(e)}")

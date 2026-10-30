@@ -1,0 +1,622 @@
+Directory structure:
+└── Caller-AI/
+    ├── README.md
+    ├── requirements.txt
+    ├── backend/
+    │   ├── app/
+    │   │   ├── __init__.py
+    │   │   ├── main.py
+    │   │   ├── api/
+    │   │   │   ├── __init__.py
+    │   │   │   └── routes/
+    │   │   │       ├── __init__.py
+    │   │   │       └── leads.py
+    │   │   ├── core/
+    │   │   │   ├── __init__.py
+    │   │   │   └── config.py
+    │   │   ├── schemas/
+    │   │   │   ├── __init__.py
+    │   │   │   └── leads.py
+    │   │   └── services/
+    │   │       ├── __init__.py
+    │   │       └── csv_processor.py
+    │   └── tests/
+    │       ├── __init__.py
+    │       └── test_csv_upload.py
+    └── scripts/
+        └── setup.py
+
+================================================
+FILE: README.md
+================================================
+# AI Calling Platform - CSV Lead Upload
+
+This is the backend component of an AI calling platform, starting with a CSV ingestion endpoint.
+
+## Setup
+
+To set up the project (create a virtual environment and install dependencies), simply run the setup script:
+
+```bash
+python scripts/setup.py
+```
+
+## Running the application
+
+To run the backend server using `uvicorn`:
+
+```bash
+# On Linux/macOS:
+.venv/bin/uvicorn backend.app.main:app --reload
+
+# On Windows:
+.venv\Scripts\uvicorn backend.app.main:app --reload
+```
+
+The API will be available at `http://localhost:8000`.
+
+## API Documentation
+
+FastAPI provides automatic API documentation:
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+
+## Running Tests
+
+To run the automated tests, simply execute:
+
+```bash
+# On Linux/macOS:
+PYTHONPATH=$(pwd) .venv/bin/pytest backend/tests/
+
+# On Windows:
+set PYTHONPATH=%cd%
+.venv\Scripts\pytest backend/tests/
+```
+
+
+
+================================================
+FILE: requirements.txt
+================================================
+fastapi>=0.100.0
+uvicorn>=0.22.0
+python-multipart>=0.0.6
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+pytest>=7.0.0
+httpx>=0.24.0
+
+
+
+================================================
+FILE: backend/app/__init__.py
+================================================
+[Empty file]
+
+
+================================================
+FILE: backend/app/main.py
+================================================
+from fastapi import FastAPI
+from backend.app.core.config import settings
+from backend.app.api.routes import leads
+
+app = FastAPI(title=settings.project_name)
+
+app.include_router(leads.router, prefix=f"{settings.api_v1_str}/leads", tags=["leads"])
+
+
+
+================================================
+FILE: backend/app/api/__init__.py
+================================================
+[Empty file]
+
+
+================================================
+FILE: backend/app/api/routes/__init__.py
+================================================
+[Empty file]
+
+
+================================================
+FILE: backend/app/api/routes/leads.py
+================================================
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from backend.app.schemas.leads import CsvProcessingResponse
+from backend.app.services.csv_processor import process_csv
+import io
+
+router = APIRouter()
+
+@router.post("/upload-csv", response_model=CsvProcessingResponse)
+async def upload_csv(
+    file: UploadFile = File(...),
+    agent_id: str = Form(...)
+):
+    if not agent_id.strip():
+        raise HTTPException(status_code=400, detail="agent_id cannot be empty.")
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing file.")
+
+    if file.content_type not in ["text/csv", "application/vnd.ms-excel"]:
+        # If it doesn't have a csv content type and doesn't end with .csv
+        if not file.filename.endswith(".csv"):
+            raise HTTPException(status_code=400, detail="Unsupported file type.")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="File is empty.")
+
+    # Decode using utf-8-sig to handle optional BOM
+    try:
+        text_content = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
+
+    file_obj = io.StringIO(text_content)
+
+    return process_csv(file_obj, agent_id)
+
+
+
+================================================
+FILE: backend/app/core/__init__.py
+================================================
+[Empty file]
+
+
+================================================
+FILE: backend/app/core/config.py
+================================================
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    project_name: str = "AI Calling Platform"
+    api_v1_str: str = "/api/v1"
+
+settings = Settings()
+
+
+
+================================================
+FILE: backend/app/schemas/__init__.py
+================================================
+[Empty file]
+
+
+================================================
+FILE: backend/app/schemas/leads.py
+================================================
+from pydantic import BaseModel, Field
+from typing import List, Dict, Any
+
+class AcceptedLead(BaseModel):
+    row_number: int
+    name: str
+    phone: str
+    extra_fields: Dict[str, Any] = Field(default_factory=dict)
+    assigned_agent_id: str
+
+class RejectedRow(BaseModel):
+    row_number: int
+    errors: List[str]
+
+class CsvProcessingResponse(BaseModel):
+    status: str = "processed"
+    agent_id: str
+    total_rows: int
+    accepted_count: int
+    rejected_count: int
+    accepted_leads: List[AcceptedLead] = Field(default_factory=list)
+    rejected_rows: List[RejectedRow] = Field(default_factory=list)
+
+
+
+================================================
+FILE: backend/app/services/__init__.py
+================================================
+[Empty file]
+
+
+================================================
+FILE: backend/app/services/csv_processor.py
+================================================
+import csv
+import re
+from typing import TextIO, List, Tuple
+from fastapi import HTTPException
+from backend.app.schemas.leads import CsvProcessingResponse, AcceptedLead, RejectedRow
+
+REQUIRED_HEADERS = {"name", "phone"}
+
+def normalize_header(header: str) -> str:
+    return header.strip().lower().replace(" ", "_")
+
+def normalize_phone(phone: str) -> str:
+    phone = re.sub(r'[\s\-\(\)\.]', '', phone)
+    if phone.startswith("00"):
+        phone = "+" + phone[2:]
+    return phone
+
+def is_valid_phone(phone: str) -> bool:
+    # E.164: + followed by 8-15 digits, first digit non-zero
+    return bool(re.match(r'^\+[1-9]\d{7,14}$', phone))
+
+def process_csv(file_obj: TextIO, agent_id: str) -> CsvProcessingResponse:
+    try:
+        reader = csv.reader(file_obj)
+        try:
+            raw_headers = next(reader)
+        except StopIteration:
+            raise HTTPException(status_code=400, detail="File is empty.")
+
+        # Handle completely blank header row or empty list
+        if not raw_headers or all(not h.strip() for h in raw_headers):
+            raise HTTPException(status_code=400, detail="No headers found.")
+
+        # Normalize headers
+        normalized_headers = [normalize_header(h) for h in raw_headers]
+
+        # Check for duplicates
+        if len(normalized_headers) != len(set(normalized_headers)):
+            raise HTTPException(status_code=400, detail="Duplicate headers found after normalization.")
+
+        # Check for required headers
+        missing_headers = REQUIRED_HEADERS - set(normalized_headers)
+        if missing_headers:
+            raise HTTPException(status_code=400, detail=f"Missing required headers: {', '.join(missing_headers)}")
+
+        header_count = len(normalized_headers)
+        name_idx = normalized_headers.index("name")
+        phone_idx = normalized_headers.index("phone")
+
+        extra_field_indices = [
+            i for i, h in enumerate(normalized_headers) if h not in REQUIRED_HEADERS
+        ]
+
+        accepted_leads: List[AcceptedLead] = []
+        rejected_rows: List[RejectedRow] = []
+
+        row_number = 1  # Header is row 1
+
+        for row in reader:
+            row_number += 1
+
+            # Ignore completely blank rows
+            if not row or all(not cell.strip() for cell in row):
+                continue
+
+            errors = []
+
+            if len(row) != header_count:
+                errors.append(f"Expected {header_count} columns, but got {len(row)}.")
+                rejected_rows.append(RejectedRow(row_number=row_number, errors=errors))
+                continue
+
+            name = row[name_idx].strip()
+            if not name:
+                errors.append("Name cannot be empty.")
+
+            raw_phone = row[phone_idx].strip()
+            phone = normalize_phone(raw_phone)
+            if not is_valid_phone(phone):
+                errors.append("Phone number is invalid. Must be in E.164 format.")
+
+            if errors:
+                rejected_rows.append(RejectedRow(row_number=row_number, errors=errors))
+            else:
+                extra_fields = {
+                    normalized_headers[i]: row[i].strip() for i in extra_field_indices
+                }
+                accepted_leads.append(
+                    AcceptedLead(
+                        row_number=row_number,
+                        name=name,
+                        phone=phone,
+                        extra_fields=extra_fields,
+                        assigned_agent_id=agent_id
+                    )
+                )
+
+        if row_number == 1: # Only header was read
+            raise HTTPException(status_code=400, detail="File contains no data rows.")
+
+        return CsvProcessingResponse(
+            status="processed",
+            agent_id=agent_id,
+            total_rows=len(accepted_leads) + len(rejected_rows),
+            accepted_count=len(accepted_leads),
+            rejected_count=len(rejected_rows),
+            accepted_leads=accepted_leads,
+            rejected_rows=rejected_rows
+        )
+
+    except csv.Error as e:
+        raise HTTPException(status_code=400, detail=f"Malformed CSV: {str(e)}")
+
+
+
+================================================
+FILE: backend/tests/__init__.py
+================================================
+[Empty file]
+
+
+================================================
+FILE: backend/tests/test_csv_upload.py
+================================================
+import pytest
+from fastapi.testclient import TestClient
+from backend.app.main import app
+
+client = TestClient(app)
+
+ENDPOINT = "/api/v1/leads/upload-csv"
+AGENT_ID = "demo-agent-01"
+
+def test_valid_csv_multiple_leads():
+    csv_content = "Name,Phone,Course\nRahul Sharma,+919876543210,Data Science\nJane Doe,+1234567890,AI"
+    files = {"file": ("test.csv", csv_content, "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 200
+    res_json = response.json()
+    assert res_json["status"] == "processed"
+    assert res_json["total_rows"] == 2
+    assert res_json["accepted_count"] == 2
+    assert res_json["rejected_count"] == 0
+    assert len(res_json["accepted_leads"]) == 2
+    assert res_json["accepted_leads"][0]["extra_fields"] == {"course": "Data Science"}
+
+def test_header_normalization():
+    csv_content = " NaMe ,  PhOnE \nRahul,+919876543210"
+    files = {"file": ("test.csv", csv_content, "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 200
+    assert response.json()["accepted_count"] == 1
+
+def test_phone_number_normalization():
+    csv_content = "Name,Phone\nRahul, +91 987-654(3210).\nJane,001234567890"
+    files = {"file": ("test.csv", csv_content, "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 200
+    res = response.json()
+    assert res["accepted_leads"][0]["phone"] == "+919876543210"
+    assert res["accepted_leads"][1]["phone"] == "+1234567890"
+
+def test_empty_names_and_invalid_phone_numbers():
+    csv_content = "Name,Phone\n, +919876543210\nJane,invalid\nJohn,+0123456"
+    files = {"file": ("test.csv", csv_content, "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 200
+    res = response.json()
+    assert res["rejected_count"] == 3
+    assert any("Name cannot be empty." in err for err in res["rejected_rows"][0]["errors"])
+    assert any("Phone number is invalid" in err for err in res["rejected_rows"][1]["errors"])
+    assert any("Phone number is invalid" in err for err in res["rejected_rows"][2]["errors"])
+
+def test_missing_required_headers():
+    csv_content = "Name,Course\nRahul,AI"
+    files = {"file": ("test.csv", csv_content, "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 400
+    assert "Missing required headers" in response.json()["detail"]
+
+def test_duplicate_normalized_headers():
+    csv_content = "Name,Phone, phone\nRahul,+919876543210,x"
+    files = {"file": ("test.csv", csv_content, "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 400
+    assert "Duplicate headers" in response.json()["detail"]
+
+def test_empty_files_and_header_only_files():
+    # Empty file
+    files = {"file": ("test.csv", "", "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "File is empty."
+
+    # Header only file
+    files = {"file": ("test.csv", "Name,Phone", "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 400
+    assert "no data rows" in response.json()["detail"]
+
+def test_malformed_csv_input():
+    # In complete quotes usually causes issues in csv parser, wait actually python csv can handle some
+    # Let's test with null bytes
+    csv_content = b"Name,Phone\n\0,123"
+    files = {"file": ("test.csv", csv_content, "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    # csv error might happen or might just process null
+    # But let's check a typical malformed error if csv module throws
+    if response.status_code == 400:
+        assert "Malformed CSV" in response.json()["detail"] or "must be UTF-8" in response.json()["detail"] or "null" in response.text
+
+def test_rows_incorrect_column_counts():
+    csv_content = "Name,Phone\nRahul,+919876543210,Extra\nJane"
+    files = {"file": ("test.csv", csv_content, "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 200
+    res = response.json()
+    assert res["rejected_count"] == 2
+    assert "Expected 2 columns" in res["rejected_rows"][0]["errors"][0]
+
+def test_mixed_valid_and_invalid_rows():
+    csv_content = "Name,Phone\nRahul,+919876543210\n,invalid\nJane,+1234567890"
+    files = {"file": ("test.csv", csv_content, "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 200
+    res = response.json()
+    assert res["total_rows"] == 3
+    assert res["accepted_count"] == 2
+    assert res["rejected_count"] == 1
+
+def test_missing_file_and_missing_agent_id():
+    response = client.post(ENDPOINT, data={"agent_id": AGENT_ID})
+    assert response.status_code == 422 # FastAPI validation error for missing file
+
+    files = {"file": ("test.csv", "Name,Phone\nRahul,+919876543210", "text/csv")}
+    response = client.post(ENDPOINT, files=files)
+    assert response.status_code == 422 # FastAPI validation error for missing agent_id
+
+    response = client.post(ENDPOINT, files=files, data={"agent_id": "  "})
+    assert response.status_code == 400
+    assert "agent_id cannot be empty" in response.json()["detail"]
+
+def test_unsupported_file_types():
+    files = {"file": ("test.txt", "Name,Phone", "text/plain")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 400
+    assert "Unsupported file type" in response.json()["detail"]
+
+def test_blank_row_handling_and_correct_row_numbers():
+    csv_content = "Name,Phone\n\nRahul,+919876543210\n   ,   \nJane,+1234567890\n"
+    files = {"file": ("test.csv", csv_content, "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 200
+    res = response.json()
+    assert res["total_rows"] == 2
+    assert res["accepted_leads"][0]["row_number"] == 3
+    assert res["accepted_leads"][1]["row_number"] == 5
+
+def test_correct_accepted_rejected_counts_agent_assignment():
+    csv_content = "Name,Phone\nRahul,+919876543210\n,invalid"
+    files = {"file": ("test.csv", csv_content, "text/csv")}
+    data = {"agent_id": "my-agent-123"}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 200
+    res = response.json()
+    assert res["accepted_count"] == 1
+    assert res["rejected_count"] == 1
+    assert res["accepted_leads"][0]["assigned_agent_id"] == "my-agent-123"
+    assert res["agent_id"] == "my-agent-123"
+
+def test_preservation_of_optional_fields():
+    csv_content = "Name,Phone,City,Age\nRahul,+919876543210,Delhi,25"
+    files = {"file": ("test.csv", csv_content, "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 200
+    res = response.json()
+    extra = res["accepted_leads"][0]["extra_fields"]
+    assert extra == {"city": "Delhi", "age": "25"}
+
+def test_consistent_file_level_error_responses():
+    files = {"file": ("test.csv", "JustOneColumn", "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 400
+    assert "detail" in response.json()
+
+def test_bom_handling():
+    # Test file with UTF-8 BOM
+    csv_content = b"\xef\xbb\xbfName,Phone\nRahul,+919876543210"
+    files = {"file": ("test.csv", csv_content, "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 200
+    res = response.json()
+    assert res["accepted_count"] == 1
+    assert res["accepted_leads"][0]["name"] == "Rahul"
+
+def test_verification_no_db_external():
+    # Check that there is no obvious mock/patch needed to make this test work
+    # We are not creating a db or making http calls in the endpoint
+    # This is more of an architectural check, but we run a simple request to confirm it's fast and pure
+    csv_content = "Name,Phone\nRahul,+919876543210"
+    files = {"file": ("test.csv", csv_content, "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 200
+
+
+
+================================================
+FILE: scripts/setup.py
+================================================
+#!/usr/bin/env python3
+import os
+import sys
+import venv
+import subprocess
+from pathlib import Path
+
+def print_message(msg: str, is_error: bool = False):
+    prefix = "[ERROR]" if is_error else "[INFO]"
+    print(f"{prefix} {msg}")
+
+def main():
+    root_dir = Path(__file__).resolve().parent.parent
+    venv_dir = root_dir / ".venv"
+    req_file = root_dir / "requirements.txt"
+
+    if not req_file.exists():
+        print_message(f"Dependency file not found at {req_file}", is_error=True)
+        sys.exit(1)
+
+    # 1. Create or reuse the virtual environment
+    if not venv_dir.exists():
+        print_message(f"Creating virtual environment at {venv_dir}...")
+        try:
+            # Create a virtual environment using the built-in venv module
+            builder = venv.EnvBuilder(with_pip=True)
+            builder.create(venv_dir)
+            print_message("Virtual environment created successfully.")
+        except Exception as e:
+            print_message(f"Failed to create virtual environment: {e}", is_error=True)
+            sys.exit(1)
+    else:
+        print_message(f"Found existing virtual environment at {venv_dir}. Reusing it.")
+
+    # Determine pip path based on OS
+    if os.name == 'nt':
+        pip_path = venv_dir / "Scripts" / "pip.exe"
+    else:
+        pip_path = venv_dir / "bin" / "pip"
+
+    if not pip_path.exists():
+        print_message(f"Pip executable not found in virtual environment ({pip_path}). Environment might be corrupted.", is_error=True)
+        sys.exit(1)
+
+    # 2. Install dependencies
+    print_message(f"Installing missing dependencies from {req_file.name}...")
+    try:
+        # We run pip install -r requirements.txt
+        # pip inherently avoids reinstalling if the version satisfies the requirement
+        result = subprocess.run(
+            [str(pip_path), "install", "-r", str(req_file)],
+            cwd=root_dir,
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        print_message("Dependencies installed successfully.")
+        # Optional: Print output if needed
+        # print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        print_message(f"Failed to install dependencies: {e}", is_error=True)
+        print_message(e.stderr, is_error=True)
+        sys.exit(1)
+
+    print_message("Setup completed successfully.")
+
+if __name__ == "__main__":
+    main()
+
+

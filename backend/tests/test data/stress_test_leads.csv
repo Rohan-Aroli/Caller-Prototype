@@ -1,0 +1,27 @@
+﻿ Name , Phone , Email , City , Lead Score , Notes 
+Aarav Patel, +91 98765 43210 , aarav@example.com , Mumbai , 85 , Interested in enterprise plan
+Emma Watson , +1 (212) 555-0198 , emma@example.com , New York , 92 , Callback requested at 4 PM
+Lukas Becker , 004915123456789 , lukas@example.de , Berlin , 70 , Prefers WhatsApp
+Yuki Tanaka , +81.90.1234.5679 , yuki@example.jp , Tokyo , 99 , Urgent follow-up
+Sophie Martin , +33-6-12-34-56-78 , sophie@example.fr , Paris , 65 , Existing client
+Liam O'Connor , +353-87-1234567 , liam@example.ie , Dublin , 80 , Inbound demo request
+
+David Miller , 001-202-555-0143 , david@example.com , Washington , 78 , Uses 00 US prefix
+Priya Nair , +91 (080) 2345-6789 , priya@example.com , Bengaluru , 88 , Landline format with valid length
+Fatima Al-Mansoor , +971-50-123-4567 , fatima@example.ae , Dubai , 95 , High priority
+Carlos Silva , +55 11 91234-5678 , carlos@example.br , Sao Paulo , 55 , Follow up next week
+   ,   ,   ,   ,   ,   
+Elena Rostova , +7 (916) 123-45-67 , elena@example.ru , Moscow , 60 , 
+Kavita Rao , +919876543211 , kavita@example.com , Hyderabad , 90 , Minimal extra fields
+
+, +919876543212 , noname@example.com , Chennai , 40 , Should reject: empty name
+   , +12025550188 , spaces@example.com , Boston , 45 , Should reject: whitespace-only name
+John Doe , 9876543210 , john@example.com , Delhi , 50 , Should reject: missing + country code
+Jane Smith , +0123456789 , jane@example.com , Austin , 60 , Should reject: country code starts with 0
+Bob Vance , +12345 , bob@example.com , Scranton , 30 , Should reject: phone too short (<8 digits)
+Alice Cooper , +123456789012345678 , alice@example.com , Detroit , 75 , Should reject: phone too long (>15 digits)
+Victor Vance , +9198765CALLME , victor@example.com , Miami , 50 , Should reject: alphanumeric phone
+Bruce Wayne , +12025550100 , bruce@wayne.com , Gotham , 100
+Clark Kent , +12025550101 , clark@dailyplanet.com , Metropolis , 100 , Extra1 , Extra2
+Arthur Dent , +442079460919 , arthur@example.co.uk , London , 42 , Missing required name and invalid phone test lead
+ , 0000000000 , invalid@example.com , Nowhere , 0 , Should reject: both name empty and phone invalid
