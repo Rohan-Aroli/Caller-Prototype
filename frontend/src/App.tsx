@@ -1,88 +1,86 @@
-import { useState } from 'react'
-import './App.css'
+import { useState } from 'react';
+import { Header } from './components/Header';
+import { UploadForm } from './components/UploadForm';
+import { Dashboard } from './components/Dashboard';
+import type { CsvProcessingResponse } from './types';
+import './index.css';
 
 function App() {
-  const [file, setFile] = useState<File | null>(null)
-  const [agentId, setAgentId] = useState<string>('')
-  const [message, setMessage] = useState<string>('')
-  const [loading, setLoading] = useState<boolean>(false)
+  const [loading, setLoading] = useState<boolean>(false);
+  const [result, setResult] = useState<CsvProcessingResponse | null>(null);
+  const [globalError, setGlobalError] = useState<string>('');
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      setFile(e.target.files[0])
-    }
-  }
+  const handleUpload = async (file: File, agentId: string) => {
+    setLoading(true);
+    setGlobalError('');
+    setResult(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!file || !agentId) {
-      setMessage('Please select a file and enter an agent ID.')
-      return
-    }
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('agent_id', agentId);
 
-    setLoading(true)
-    setMessage('')
-
-    const formData = new FormData()
-    formData.append('file', file)
-    formData.append('agent_id', agentId)
-
-    const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+    const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
     try {
       const response = await fetch(`${baseUrl}/api/v1/leads/upload-csv`, {
         method: 'POST',
         body: formData,
-      })
+      });
 
-      const data = await response.json()
+      const data = await response.json();
 
       if (response.ok) {
-        setMessage(`Success! Processed ${data.processed_count} rows. ${data.errors.length} errors.`)
-        console.log(data)
+        setResult(data as CsvProcessingResponse);
       } else {
-        setMessage(`Error: ${data.detail || 'Failed to upload CSV'}`)
+        setGlobalError(data.detail || 'Failed to validate CSV due to server error.');
       }
     } catch (err) {
-      setMessage('Error connecting to the server.')
-      console.error(err)
+      console.error(err);
+      setGlobalError('Error connecting to the validation server. Please try again later.');
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
+
+  const handleReset = () => {
+    setResult(null);
+    setGlobalError('');
+  };
 
   return (
-    <div className="App">
-      <h1>CSV Lead Upload</h1>
-      <form onSubmit={handleSubmit} className="upload-form">
-        <div>
-          <label htmlFor="agentId">Agent ID: </label>
-          <input
-            type="text"
-            id="agentId"
-            value={agentId}
-            onChange={(e) => setAgentId(e.target.value)}
-            placeholder="Enter Agent ID"
-            required
-          />
+    <div className="min-h-screen bg-gray-900 text-white flex flex-col font-sans selection:bg-accent/30">
+      <Header />
+
+      <main className="flex-1 flex flex-col py-12 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-7xl mx-auto w-full flex-1 flex flex-col">
+
+          {!result ? (
+            <div className="flex-1 flex flex-col items-center justify-center space-y-12 max-w-3xl mx-auto w-full animate-in fade-in slide-in-from-bottom-8 duration-700">
+              <div className="text-center space-y-4">
+                <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight text-white">
+                  Validate Your Leads
+                </h1>
+                <p className="text-lg md:text-xl text-gray-400 max-w-2xl mx-auto">
+                  Upload your CSV file to instantly clean, parse, and validate lead data before import.
+                </p>
+              </div>
+
+              <UploadForm onUpload={handleUpload} loading={loading} />
+
+              {globalError && (
+                <div className="w-full max-w-2xl p-4 bg-error/10 border border-error/20 rounded-lg text-error text-center shadow-lg shadow-error/5">
+                  <p className="font-medium">{globalError}</p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <Dashboard data={result} onReset={handleReset} />
+          )}
+
         </div>
-        <div style={{ marginTop: '1rem' }}>
-          <label htmlFor="file">CSV File: </label>
-          <input
-            type="file"
-            id="file"
-            accept=".csv"
-            onChange={handleFileChange}
-            required
-          />
-        </div>
-        <button type="submit" disabled={loading} style={{ marginTop: '1rem' }}>
-          {loading ? 'Uploading...' : 'Upload'}
-        </button>
-      </form>
-      {message && <p style={{ marginTop: '1rem', fontWeight: 'bold' }}>{message}</p>}
+      </main>
     </div>
-  )
+  );
 }
 
-export default App
+export default App;
