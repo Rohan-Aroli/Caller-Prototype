@@ -6,8 +6,7 @@ export interface RejectedRow {
 export interface AcceptedLead {
   name: string;
   phone: string;
-  email?: string;
-  address?: string;
+  extra_fields?: Record<string, any>;
   [key: string]: any;
 }
 

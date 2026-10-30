@@ -42,11 +42,19 @@ export function Dashboard({ data, onReset }: DashboardProps) {
     document.body.removeChild(link);
   };
 
-  const filteredAccepted = data.accepted_leads.filter(lead =>
-    Object.values(lead).some(val =>
-      String(val).toLowerCase().includes(searchTerm.toLowerCase())
-    )
-  );
+  const filteredAccepted = data.accepted_leads.filter(lead => {
+    const searchLower = searchTerm.toLowerCase();
+    const nameMatch = (lead.name || '').toLowerCase().includes(searchLower);
+    const phoneMatch = (lead.phone || '').toLowerCase().includes(searchLower);
+
+    let extraMatch = false;
+    if (lead.extra_fields) {
+        extraMatch = Object.values(lead.extra_fields).some(val =>
+            String(val).toLowerCase().includes(searchLower)
+        );
+    }
+    return nameMatch || phoneMatch || extraMatch;
+  });
 
   const filteredRejected = data.rejected_rows.filter(row =>
     row.row_number.toString().includes(searchTerm) ||
@@ -222,8 +230,7 @@ export function Dashboard({ data, onReset }: DashboardProps) {
                       <td className="px-6 py-4 text-gray-200 font-medium">{lead.name || '-'}</td>
                       <td className="px-6 py-4 text-gray-300">{lead.phone || '-'}</td>
                       <td className="px-6 py-4 text-gray-400">
-                        {Object.entries(lead)
-                          .filter(([k]) => k !== 'name' && k !== 'phone')
+                        {Object.entries(lead.extra_fields || {})
                           .map(([k, v]) => `${k}: ${v}`)
                           .join(', ') || '-'}
                       </td>

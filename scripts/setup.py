@@ -69,12 +69,12 @@ def main():
     if frontend_dir.exists() and (frontend_dir / "package.json").exists():
         print_message("Found frontend directory. Checking for Node.js...")
         try:
-            subprocess.run(["node", "--version"], check=True, capture_output=True, text=True)
-            subprocess.run(["npm", "--version"], check=True, capture_output=True, text=True)
+            subprocess.run(["node", "--version"], check=True, capture_output=True, text=True, shell=True if os.name == 'nt' else False)
+            subprocess.run(["npm", "--version"], check=True, capture_output=True, text=True, shell=True if os.name == 'nt' else False)
 
             print_message("Installing frontend dependencies...")
             subprocess.run(
-                ["npm", "install"],
+                ["npm", "install"], shell=True if os.name == 'nt' else False,
                 cwd=frontend_dir,
                 check=True,
                 capture_output=True,
