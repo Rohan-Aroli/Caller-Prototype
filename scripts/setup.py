@@ -62,6 +62,43 @@ def main():
         print_message(e.stderr, is_error=True)
         sys.exit(1)
 
+
+
+    # 3. Setup Frontend
+    frontend_dir = root_dir / "frontend"
+    if frontend_dir.exists() and (frontend_dir / "package.json").exists():
+        print_message("Found frontend directory. Checking for Node.js...")
+        try:
+            subprocess.run(["node", "--version"], check=True, capture_output=True, text=True)
+            subprocess.run(["npm", "--version"], check=True, capture_output=True, text=True)
+
+            print_message("Installing frontend dependencies...")
+            subprocess.run(
+                ["npm", "install"],
+                cwd=frontend_dir,
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            print_message("Frontend dependencies installed successfully.")
+
+            # Copy .env.example to .env if .env doesn't exist
+            env_example = frontend_dir / ".env.example"
+            env_file = frontend_dir / ".env"
+            if env_example.exists() and not env_file.exists():
+                import shutil
+                shutil.copy(env_example, env_file)
+                print_message("Created frontend/.env from frontend/.env.example")
+
+        except FileNotFoundError:
+            print_message("Node.js or npm not found. Skipping frontend setup.", is_error=True)
+        except subprocess.CalledProcessError as e:
+            print_message(f"Failed to setup frontend: {e}", is_error=True)
+            print_message(e.stderr, is_error=True)
+            sys.exit(1)
+    else:
+        print_message("No frontend directory with package.json found. Skipping frontend setup.")
+
     print_message("Setup completed successfully.")
 
 if __name__ == "__main__":
