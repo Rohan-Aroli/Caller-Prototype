@@ -64,7 +64,23 @@ def main():
 
 
 
-    # 3. Setup Frontend
+    # 3. Create Root .env if it doesn't exist
+    root_env_file = root_dir / ".env"
+    if not root_env_file.exists():
+        print_message(f"Generating root .env template at {root_env_file}...")
+        try:
+            with open(root_env_file, "w") as f:
+                f.write("# Telephony & Gemini Configurations\n")
+                f.write("TWILIO_ACCOUNT_SID=\n")
+                f.write("TWILIO_AUTH_TOKEN=\n")
+                f.write("TWILIO_FROM_NUMBER=\n")
+                f.write("GEMINI_API_KEY=\n")
+                f.write("SERVER_DOMAIN=\n")
+            print_message("Root .env template created.")
+        except Exception as e:
+            print_message(f"Failed to create root .env file: {e}", is_error=True)
+
+    # 4. Setup Frontend
     frontend_dir = root_dir / "frontend"
     if frontend_dir.exists() and (frontend_dir / "package.json").exists():
         print_message("Found frontend directory. Checking for Node.js...")
