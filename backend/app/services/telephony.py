@@ -1,12 +1,15 @@
 import json
 import base64
 import asyncio
-import audioop
 import logging
 from typing import Optional
 from twilio.rest import Client
-import websockets
 from fastapi import WebSocket, WebSocketDisconnect
+import httpx
+import google.generativeai as genai
+from deepgram import AsyncDeepgramClient
+from deepgram.core.events import EventType
+from deepgram.listen.v1.types.listen_v1results import ListenV1Results
 
 from backend.app.core.config import settings
 
@@ -14,169 +17,238 @@ logger = logging.getLogger(__name__)
 
 class TwilioProvider:
     def __init__(self):
-        # We only initialize Twilio Client if credentials are provided
+        # Initialize Google Generative AI client once if API key is present
+        if settings.GEMINI_API_KEY:
+            genai.configure(api_key=settings.GEMINI_API_KEY)
+
+    @property
+    def client(self) -> Optional[Client]:
+        """Dynamically instantiate or reuse Twilio Client so .env changes are respected."""
         if settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN:
-            self.client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-        else:
-            self.client = None
-            logger.warning("Twilio credentials not found. Calls cannot be triggered.")
-
-        # The Gemini Multimodal Live API websocket endpoint
-        self.gemini_url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
-
-        # Audio configuration
-        self.twilio_sample_rate = 8000
-        self.gemini_sample_rate = 16000
-        self.twilio_sample_width = 1 # 8-bit mu-law
-        self.gemini_sample_width = 2 # 16-bit PCM
+            return Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+        return None
 
     def trigger_call(self, to_number: str) -> str:
-        if not self.client:
-            raise ValueError("Twilio client is not initialized.")
+        client = self.client
+        if not client:
+            raise ValueError("TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be configured in .env.")
+
+        if not settings.TWILIO_FROM_NUMBER:
+            raise ValueError("TWILIO_FROM_NUMBER must be configured in .env.")
 
         if not settings.SERVER_DOMAIN:
-            raise ValueError("SERVER_DOMAIN is not set. Twilio needs a public endpoint.")
+            raise ValueError("SERVER_DOMAIN is not set. A public domain (e.g. ngrok) is required for Twilio webhooks.")
 
-        twiml_url = f"https://{settings.SERVER_DOMAIN}{settings.api_v1_str}/calls/twiml"
+        # Strip any accidental http:// or https:// from domain
+        clean_domain = settings.SERVER_DOMAIN.replace("https://", "").replace("http://", "").strip("/")
+        twiml_url = f"https://{clean_domain}{settings.api_v1_str}/calls/twiml"
 
-        call = self.client.calls.create(
+        call = client.calls.create(
             to=to_number,
             from_=settings.TWILIO_FROM_NUMBER,
             url=twiml_url
         )
         return call.sid
 
+    async def _generate_llm_response(self, chat_session, user_text: str) -> str:
+        """Query standard Gemini Flash model via text prompting."""
+        try:
+            response = await chat_session.send_message_async(user_text)
+            return response.text.strip() if response and response.text else ""
+        except Exception as e:
+            logger.error(f"Gemini LLM error: {e}")
+            return "I apologize, I had trouble processing that. Could you please repeat?"
+
+    async def _synthesize_and_stream_to_twilio(
+        self,
+        text: str,
+        http_client: httpx.AsyncClient,
+        twilio_ws: WebSocket,
+        stream_sid: str
+    ):
+        """
+        Sends text to Deepgram Aura TTS via HTTP REST requesting raw 8kHz headerless mu-law audio,
+        then chunks it into 160-byte packets (20ms frames) and streams directly to Twilio WebSocket.
+        """
+        if not text.strip():
+            return
+
+        try:
+            model = settings.DEEPGRAM_VOICE_MODEL or "aura-asteria-en"
+            url = f"https://api.deepgram.com/v1/speak?model={model}&encoding=mulaw&sample_rate=8000&container=none"
+            headers = {
+                "Authorization": f"Token {settings.DEEPGRAM_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            body = {"text": text}
+
+            response = await http_client.post(url, headers=headers, json=body)
+            if response.status_code != 200:
+                logger.error(f"Deepgram Aura TTS error: {response.status_code} - {response.text}")
+                return
+
+            raw_mulaw = response.content
+            if not raw_mulaw:
+                return
+
+            # Transmit in 160-byte chunks (20ms frames at 8000Hz) to preserve standard telephony cadence
+            chunk_size = 160
+            for i in range(0, len(raw_mulaw), chunk_size):
+                chunk = raw_mulaw[i : i + chunk_size]
+                payload = base64.b64encode(chunk).decode("utf-8")
+                await twilio_ws.send_json({
+                    "event": "media",
+                    "streamSid": stream_sid,
+                    "media": {"payload": payload}
+                })
+                await asyncio.sleep(0.018)  # ~18ms-20ms pacing
+
+        except Exception as e:
+            logger.warning(f"Deepgram Aura TTS / Twilio streaming warning: {e}")
+
     async def handle_media_stream(self, twilio_ws: WebSocket):
         """
-        Accepts the Twilio websocket, opens a websocket to Gemini,
-        and bridges the audio bidirectionally.
+        Accepts Twilio WebSocket and runs a consolidated, 100% free pipeline:
+        1. STT: Streams Twilio 8kHz mu-law audio to Deepgram Live WebSocket (nova-2).
+        2. LLM: Triggers Gemini Flash REST upon speech_final / is_final detection.
+        3. TTS: Synthesizes response using Deepgram Aura TTS (aura-asteria-en) returning 8kHz mu-law.
+        4. Playback: Streams 160-byte packets directly to Twilio without intermediate conversions.
         """
         await twilio_ws.accept()
 
-        if not settings.GEMINI_API_KEY:
-            logger.error("GEMINI_API_KEY is not set.")
-            await twilio_ws.close()
+        # Validate necessary API keys
+        if not settings.DEEPGRAM_API_KEY:
+            logger.error("DEEPGRAM_API_KEY is not configured in .env.")
+            await twilio_ws.close(code=1008, reason="DEEPGRAM_API_KEY is not configured.")
             return
 
-        gemini_ws_url = f"{self.gemini_url}?key={settings.GEMINI_API_KEY}"
+        if not settings.GEMINI_API_KEY:
+            logger.error("GEMINI_API_KEY is not configured in .env.")
+            await twilio_ws.close(code=1008, reason="GEMINI_API_KEY is not configured.")
+            return
 
-        try:
-            async with websockets.connect(gemini_ws_url) as gemini_ws:
-                # Send the initial setup message to Gemini
-                setup_msg = {
-                    "setup": {
-                        "model": "models/gemini-2.0-flash-exp",
-                        "generationConfig": {
-                            "responseModalities": ["AUDIO"]
-                        }
-                    }
-                }
-                await gemini_ws.send(json.dumps(setup_msg))
+        # Initialize Clients
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        model = genai.GenerativeModel(
+            model_name="gemini-3.5-flash-lite",
+            system_instruction=(
+                "You are an AI phone assistant for an inbound/outbound call. "
+                "Keep responses concise, natural, conversational, and direct (1-2 sentences), "
+                "suitable for spoken conversation over a phone call."
+            )
+        )
+        chat_session = model.start_chat(history=[])
 
-                # Wait for the setup response
-                setup_response_raw = await gemini_ws.recv()
+        dg_client = AsyncDeepgramClient(api_key=settings.DEEPGRAM_API_KEY)
+        stream_sid: Optional[str] = None
+        stream_ready = asyncio.Event()
+        processing_lock = asyncio.Lock()
 
-                stream_sid = None
-
-                # Task for receiving from Twilio and sending to Gemini
-                async def twilio_to_gemini():
-                    nonlocal stream_sid
-                    try:
-                        while True:
-                            msg = await twilio_ws.receive_json()
-                            event = msg.get("event")
-
-                            if event == "start":
-                                stream_sid = msg["start"]["streamSid"]
-                                logger.info(f"Started Twilio stream: {stream_sid}")
-                            elif event == "media":
-                                payload = msg["media"]["payload"]
-                                audio_mulaw = base64.b64decode(payload)
-
-                                # Convert mu-law -> linear PCM (8kHz -> 8kHz, 16-bit)
-                                audio_lin_8k = audioop.ulaw2lin(audio_mulaw, self.gemini_sample_width)
-                                # Resample linear PCM (8kHz -> 16kHz)
-                                audio_lin_16k, _ = audioop.ratecv(
-                                    audio_lin_8k, self.gemini_sample_width, 1,
-                                    self.twilio_sample_rate, self.gemini_sample_rate, None
-                                )
-
-                                # Send to Gemini
-                                gemini_audio_msg = {
-                                    "realtimeInput": {
-                                        "mediaChunks": [
-                                            {
-                                                "mimeType": "audio/pcm;rate=16000",
-                                                "data": base64.b64encode(audio_lin_16k).decode('utf-8')
-                                            }
-                                        ]
-                                    }
-                                }
-                                await gemini_ws.send(json.dumps(gemini_audio_msg))
-
-                            elif event == "stop":
-                                logger.info(f"Twilio stream stopped: {stream_sid}")
-                                break
-                    except WebSocketDisconnect:
-                        logger.info("Twilio websocket disconnected.")
-                    except Exception as e:
-                        logger.error(f"Error in twilio_to_gemini: {e}")
-
-                # Task for receiving from Gemini and sending to Twilio
-                async def gemini_to_twilio():
-                    try:
-                        while True:
-                            if not stream_sid:
-                                await asyncio.sleep(0.01)
-                                continue
-
-                            msg_str = await gemini_ws.recv()
-                            msg = json.loads(msg_str)
-
-                            if "serverContent" in msg:
-                                server_content = msg["serverContent"]
-                                if "modelTurn" in server_content:
-                                    parts = server_content["modelTurn"].get("parts", [])
-                                    for part in parts:
-                                        if "inlineData" in part:
-                                            # Audio from Gemini (PCM 16kHz)
-                                            audio_data_b64 = part["inlineData"].get("data")
-                                            if audio_data_b64:
-                                                audio_pcm_16k = base64.b64decode(audio_data_b64)
-
-                                                # Resample PCM (16kHz -> 8kHz)
-                                                audio_pcm_8k, _ = audioop.ratecv(
-                                                    audio_pcm_16k, self.gemini_sample_width, 1,
-                                                    self.gemini_sample_rate, self.twilio_sample_rate, None
-                                                )
-                                                # Convert linear PCM -> mu-law
-                                                audio_mulaw = audioop.lin2ulaw(audio_pcm_8k, self.gemini_sample_width)
-
-                                                twilio_media_msg = {
-                                                    "event": "media",
-                                                    "streamSid": stream_sid,
-                                                    "media": {
-                                                        "payload": base64.b64encode(audio_mulaw).decode('utf-8')
-                                                    }
-                                                }
-                                                await twilio_ws.send_json(twilio_media_msg)
-
-                    except websockets.exceptions.ConnectionClosed:
-                        logger.info("Gemini websocket closed.")
-                    except Exception as e:
-                        logger.error(f"Error in gemini_to_twilio: {e}")
-
-                # Run both tasks concurrently
-                await asyncio.gather(
-                    twilio_to_gemini(),
-                    gemini_to_twilio()
-                )
-
-        except Exception as e:
-            logger.error(f"Error connecting to Gemini WebSocket: {e}")
+        # Reusable async HTTP client for Deepgram Aura TTS requests
+        async with httpx.AsyncClient(timeout=10.0) as http_client:
             try:
-                await twilio_ws.close()
-            except Exception:
-                pass
+                # Connect to Deepgram Live WebSocket configured for 8kHz mu-law
+                async with dg_client.listen.v1.connect(
+                    model="nova-2",
+                    encoding="mulaw",
+                    sample_rate=8000,
+                    channels=1,
+                    endpointing=300,
+                    smart_format=True
+                ) as dg_socket:
+
+                    # Callback for Deepgram transcription results
+                    async def on_deepgram_message(message):
+                        nonlocal stream_sid
+                        try:
+                            if not isinstance(message, ListenV1Results):
+                                return
+
+                            is_final = getattr(message, "is_final", False)
+                            speech_final = getattr(message, "speech_final", False)
+
+                            if not (is_final or speech_final):
+                                return
+
+                            channel = getattr(message, "channel", None)
+                            if not channel or not channel.alternatives:
+                                return
+
+                            transcript = channel.alternatives[0].transcript.strip()
+                            if not transcript:
+                                return
+
+                            logger.info(f"User Transcribed: {transcript} (speech_final={speech_final}, is_final={is_final})")
+
+                            # Trigger LLM -> Deepgram Aura TTS pipeline under lock to prevent race conditions
+                            async def run_pipeline():
+                                async with processing_lock:
+                                    if not stream_sid:
+                                        return
+                                    # 1. Query Gemini text LLM
+                                    reply_text = await self._generate_llm_response(chat_session, transcript)
+                                    logger.info(f"AI Response: {reply_text}")
+
+                                    # 2. Synthesize with Deepgram Aura and stream to Twilio
+                                    await self._synthesize_and_stream_to_twilio(
+                                        reply_text,
+                                        http_client,
+                                        twilio_ws,
+                                        stream_sid
+                                    )
+
+                            asyncio.create_task(run_pipeline())
+
+                        except Exception as e:
+                            logger.warning(f"Warning processing Deepgram message: {e}")
+
+                    dg_socket.on(EventType.MESSAGE, on_deepgram_message)
+
+                    # Start Deepgram listener task
+                    dg_listener_task = asyncio.create_task(dg_socket.start_listening())
+
+                    # Task to read audio from Twilio and pipe into Deepgram
+                    async def twilio_to_deepgram():
+                        nonlocal stream_sid
+                        try:
+                            while True:
+                                msg = await twilio_ws.receive_json()
+                                event = msg.get("event")
+
+                                if event == "start":
+                                    stream_sid = msg["start"]["streamSid"]
+                                    stream_ready.set()
+                                    logger.info(f"Twilio stream started with streamSid: {stream_sid}")
+                                elif event == "media":
+                                    payload = msg["media"]["payload"]
+                                    audio_mulaw = base64.b64decode(payload)
+                                    # Send raw 8kHz mu-law audio directly to Deepgram STT
+                                    await dg_socket.send_media(audio_mulaw)
+                                elif event == "stop":
+                                    logger.info(f"Twilio stream stopped: {stream_sid}")
+                                    break
+
+                        except WebSocketDisconnect:
+                            logger.info("Twilio WebSocket disconnected.")
+                        except Exception as e:
+                            logger.warning(f"Twilio WebSocket read warning: {e}")
+
+                    twilio_task = asyncio.create_task(twilio_to_deepgram())
+
+                    # Wait until Twilio or Deepgram completes
+                    done, pending = await asyncio.wait(
+                        [twilio_task, dg_listener_task],
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+
+                    for task in pending:
+                        task.cancel()
+
+            except Exception as e:
+                logger.error(f"Error during audio stream session: {e}")
+                try:
+                    await twilio_ws.close()
+                except Exception:
+                    pass
 
 telephony_provider = TwilioProvider()

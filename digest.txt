@@ -1,6 +1,7 @@
 Directory structure:
 └── Caller-AI/
     ├── README.md
+    ├── pytest.ini
     ├── requirements.txt
     ├── backend/
     │   ├── app/
@@ -10,6 +11,7 @@ Directory structure:
     │   │   │   ├── __init__.py
     │   │   │   └── routes/
     │   │   │       ├── __init__.py
+    │   │   │       ├── calls.py
     │   │   │       └── leads.py
     │   │   ├── core/
     │   │   │   ├── __init__.py
@@ -19,10 +21,32 @@ Directory structure:
     │   │   │   └── leads.py
     │   │   └── services/
     │   │       ├── __init__.py
-    │   │       └── csv_processor.py
+    │   │       ├── csv_processor.py
+    │   │       └── telephony.py
     │   └── tests/
     │       ├── __init__.py
-    │       └── test_csv_upload.py
+    │       ├── test_csv_upload.py
+    │       └── test data/
+    │           ├── stress_test_leads.csv
+    │           └── test_leads.csv
+    ├── frontend/
+    │   ├── README.md
+    │   ├── index.html
+    │   ├── package.json
+    │   ├── tsconfig.app.json
+    │   ├── tsconfig.json
+    │   ├── tsconfig.node.json
+    │   ├── vite.config.ts
+    │   ├── .oxlintrc.json
+    │   └── src/
+    │       ├── App.tsx
+    │       ├── index.css
+    │       ├── main.tsx
+    │       ├── types.ts
+    │       └── components/
+    │           ├── Dashboard.tsx
+    │           ├── Header.tsx
+    │           └── UploadForm.tsx
     └── scripts/
         └── setup.py
 
@@ -31,7 +55,7 @@ FILE: README.md
 ================================================
 # AI Calling Platform - CSV Lead Upload
 
-This is the backend component of an AI calling platform, starting with a CSV ingestion endpoint.
+This is the backend component of an AI calling platform, featuring a resilient, high-throughput CSV lead ingestion and validation pipeline.
 
 ## Setup
 
@@ -55,24 +79,132 @@ To run the backend server using `uvicorn`:
 
 The API will be available at `http://localhost:8000`.
 
-## API Documentation
+## API Documentation & Health Check
 
-FastAPI provides automatic API documentation:
+- Health Check: `http://localhost:8000/health`
 - Swagger UI: `http://localhost:8000/docs`
 - ReDoc: `http://localhost:8000/redoc`
 
 ## Running Tests
 
-To run the automated tests, simply execute:
+To run the automated tests (`pytest.ini` automatically configures module resolution):
 
 ```bash
 # On Linux/macOS:
-PYTHONPATH=$(pwd) .venv/bin/pytest backend/tests/
+.venv/bin/pytest
 
 # On Windows:
-set PYTHONPATH=%cd%
-.venv\Scripts\pytest backend/tests/
+.venv\Scripts\pytest
 ```
+
+## Full-Stack Development Setup
+
+This repository now includes both the FastAPI backend and a Vite+React frontend, providing an end-to-end platform for CSV lead upload.
+
+### Prerequisites
+
+- Python >= 3.8
+- Node.js >= 18
+- npm
+
+### Repository Structure
+
+- `backend/` - Contains the FastAPI backend application.
+- `frontend/` - Contains the React Vite frontend web application.
+- `scripts/` - Scripts for project initialization.
+- `tests/` - Backend tests.
+
+### First-time Setup Instructions
+
+To setup both the backend and frontend at once, execute the unified setup script from the repository root:
+
+```bash
+python scripts/setup.py
+```
+This script will:
+1. Create a Python virtual environment for the backend (`.venv`).
+2. Install Python backend dependencies.
+3. Install Node.js frontend dependencies via `npm`.
+4. Copy the frontend `.env.example` file to `.env`.
+
+### Commands to Start the Backend
+
+Run the backend server using `uvicorn`:
+
+```bash
+# On Linux/macOS:
+.venv/bin/uvicorn backend.app.main:app --reload
+
+# On Windows:
+.venv\Scripts\uvicorn backend.app.main:app --reload
+```
+The backend API will run at `http://localhost:8000`.
+
+### Commands to Start the Frontend
+
+In a new terminal tab, navigate to the `frontend/` directory and run:
+
+```bash
+cd frontend
+npm run dev --host
+```
+The frontend web app will typically be available at `http://localhost:5173`.
+
+### Required Environment Variables
+
+**Backend (Root `.env`)**:
+A `.env` file is generated in the root directory during setup for Telephony & Gemini variables. You must populate it with your credentials:
+- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`: Get these from your Twilio Console.
+- `GEMINI_API_KEY`: Get this from Google AI Studio.
+- `SERVER_DOMAIN`: The public domain of your backend (e.g., `your-subdomain.ngrok-free.app`). Required for Twilio to reach your local server.
+
+**Frontend**: A `.env` file is generated inside the `frontend` folder containing:
+`VITE_API_BASE_URL=http://localhost:8000`
+You can modify this if your backend listens on a different port.
+
+### Real-Time Voice Calls
+
+The backend now supports real-time voice calls by bridging Twilio WebSockets directly with the Gemini Multimodal Live API.
+
+1. **Expose Localhost via ngrok**:
+   To receive Twilio Webhooks on your local machine, run:
+   ```bash
+   ngrok http 8000
+   ```
+   Then set `SERVER_DOMAIN` in your root `.env` to the ngrok forwarding domain (e.g., `1234-abcd.ngrok-free.app`), without `http://` or `https://`.
+
+2. **Triggering a Call**:
+   You can trigger a call by sending a POST request to `/api/v1/calls/trigger-call`:
+   ```json
+   {
+       "phone_number": "+1234567890"
+   }
+   ```
+   When the user answers, Twilio requests TwiML from `/api/v1/calls/twiml`, which connects them to the `/api/v1/calls/media-stream` WebSocket for a real-time conversation powered by Gemini!
+
+### CSV Upload Workflow
+
+1. Navigate to the frontend UI (`http://localhost:5173`).
+2. Enter an "Agent ID" in the text field.
+3. Select a `.csv` file.
+4. Click "Upload" to submit to the backend endpoint (`/api/v1/leads/upload-csv`).
+5. Wait for the success or error response which will parse and validate CSV contents synchronously.
+
+### Troubleshooting Guidance
+
+- **Frontend doesn't connect to backend**: Ensure CORS is configured properly in `backend/app/main.py`. The backend should allow origins `http://localhost:5173`. Make sure the frontend `.env` points to the correct backend port.
+- **Node.js dependencies missing**: Rerun `npm install` inside the `frontend` directory manually if the setup script fails.
+- **Python environments misconfigured**: Ensure you are executing commands with `.venv/bin/python` or similar relative paths to isolate packages. If corrupted, remove the `.venv` folder and run `python scripts/setup.py` again.
+
+
+
+================================================
+FILE: pytest.ini
+================================================
+[pytest]
+pythonpath = .
+testpaths = backend/tests
+
 
 
 
@@ -86,6 +218,11 @@ pydantic>=2.0.0
 pydantic-settings>=2.0.0
 pytest>=7.0.0
 httpx>=0.24.0
+twilio>=9.0.0
+websockets>=12.0
+google-generativeai>=0.8.0
+deepgram-sdk>=3.0.0
+elevenlabs>=1.0.0
 
 
 
@@ -99,12 +236,34 @@ FILE: backend/app/__init__.py
 FILE: backend/app/main.py
 ================================================
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from backend.app.core.config import settings
-from backend.app.api.routes import leads
+from backend.app.api.routes import leads, calls
 
 app = FastAPI(title=settings.project_name)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/health", tags=["health"])
+async def health_check():
+    return {"status": "healthy", "project": settings.project_name}
+
 app.include_router(leads.router, prefix=f"{settings.api_v1_str}/leads", tags=["leads"])
+app.include_router(calls.router, prefix=f"{settings.api_v1_str}/calls", tags=["calls"])
 
 
 
@@ -121,14 +280,115 @@ FILE: backend/app/api/routes/__init__.py
 
 
 ================================================
-FILE: backend/app/api/routes/leads.py
+FILE: backend/app/api/routes/calls.py
 ================================================
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
-from backend.app.schemas.leads import CsvProcessingResponse
-from backend.app.services.csv_processor import process_csv
-import io
+import logging
+from fastapi import APIRouter, HTTPException, WebSocket, Request, Response
+from pydantic import BaseModel
+from twilio.request_validator import RequestValidator
+
+from backend.app.services.telephony import telephony_provider
+from backend.app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+class CallRequest(BaseModel):
+    phone_number: str
+
+async def verify_twilio_request(request: Request) -> bool:
+    """
+    Validates that the incoming HTTP request actually originated from Twilio.
+    Returns True if valid or if verification is turned off in settings.
+    """
+    if not settings.VERIFY_TWILIO_SIGNATURE or not settings.TWILIO_AUTH_TOKEN:
+        return True
+
+    signature = request.headers.get("X-Twilio-Signature")
+    if not signature:
+        return False
+
+    validator = RequestValidator(settings.TWILIO_AUTH_TOKEN)
+    url = str(request.url)
+
+    # For POST requests, include the form body
+    if request.method == "POST":
+        form_data = await request.form()
+        params = dict(form_data)
+    else:
+        params = dict(request.query_params)
+
+    return validator.validate(url, params, signature)
+
+@router.post("/trigger-call")
+async def trigger_call(request: CallRequest):
+    """
+    Initiate an outbound call to the provided phone number.
+    """
+    try:
+        call_sid = telephony_provider.trigger_call(request.phone_number)
+        return {"status": "success", "call_sid": call_sid}
+    except ValueError as e:
+        logger.warning(f"Configuration or validation error triggering call: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to trigger call: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/twiml")
+@router.get("/twiml")
+async def get_twiml(request: Request):
+    """
+    Returns TwiML to route the answered call to the Media Stream (WebSocket).
+    """
+    if not await verify_twilio_request(request):
+        logger.warning("Rejected unverified request to /twiml")
+        raise HTTPException(status_code=403, detail="Twilio signature verification failed.")
+
+    if not settings.SERVER_DOMAIN:
+        raise HTTPException(status_code=500, detail="SERVER_DOMAIN not configured.")
+
+    clean_domain = settings.SERVER_DOMAIN.replace("https://", "").replace("http://", "").strip("/")
+    ws_url = f"wss://{clean_domain}{settings.api_v1_str}/calls/media-stream"
+
+    twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Connect>
+        <Stream url="{ws_url}" />
+    </Connect>
+</Response>"""
+
+    return Response(content=twiml_response, media_type="application/xml")
+
+@router.websocket("/media-stream")
+async def media_stream(websocket: WebSocket):
+    """
+    WebSocket endpoint for Twilio Media Stream.
+    """
+    await telephony_provider.handle_media_stream(websocket)
+
+
+
+================================================
+FILE: backend/app/api/routes/leads.py
+================================================
+import io
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from starlette.concurrency import run_in_threadpool
+from backend.app.schemas.leads import CsvProcessingResponse
+from backend.app.services.csv_processor import process_csv
+from backend.app.core.config import settings
+
+router = APIRouter()
+
+ALLOWED_CONTENT_TYPES = {
+    "text/csv",
+    "application/vnd.ms-excel",
+    "application/csv",
+    "text/x-csv",
+    "application/x-csv",
+}
 
 @router.post("/upload-csv", response_model=CsvProcessingResponse)
 async def upload_csv(
@@ -141,24 +401,38 @@ async def upload_csv(
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing file.")
 
-    if file.content_type not in ["text/csv", "application/vnd.ms-excel"]:
-        # If it doesn't have a csv content type and doesn't end with .csv
-        if not file.filename.endswith(".csv"):
-            raise HTTPException(status_code=400, detail="Unsupported file type.")
+    is_csv_content_type = file.content_type in ALLOWED_CONTENT_TYPES
+    is_csv_extension = file.filename.lower().endswith(".csv")
 
-    content = await file.read()
-    if not content:
+    if not is_csv_content_type and not is_csv_extension:
+        raise HTTPException(status_code=400, detail="Unsupported file type.")
+
+    # Guard against memory exhaustion DoS by chunked read with max size check
+    chunk_size = 1024 * 1024  # 1 MB chunk
+    chunks = []
+    total_bytes = 0
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        total_bytes += len(chunk)
+        if total_bytes > settings.max_upload_size_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds maximum allowed size of {settings.max_upload_size_bytes // (1024 * 1024)}MB."
+            )
+        chunks.append(chunk)
+
+    if not chunks or total_bytes == 0:
         raise HTTPException(status_code=400, detail="File is empty.")
 
-    # Decode using utf-8-sig to handle optional BOM
-    try:
-        text_content = content.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
+    content = b"".join(chunks)
 
-    file_obj = io.StringIO(text_content)
+    # Use BytesIO and TextIOWrapper with utf-8-sig to decode on-the-fly and handle BOM
+    file_obj = io.TextIOWrapper(io.BytesIO(content), encoding="utf-8-sig")
 
-    return process_csv(file_obj, agent_id)
+    # Run CPU-bound CSV processing in worker thread pool so asyncio event loop is not blocked
+    return await run_in_threadpool(process_csv, file_obj, agent_id)
 
 
 
@@ -171,11 +445,38 @@ FILE: backend/app/core/__init__.py
 ================================================
 FILE: backend/app/core/config.py
 ================================================
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import List
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )
+
     project_name: str = "AI Calling Platform"
     api_v1_str: str = "/api/v1"
+    max_upload_size_bytes: int = 10 * 1024 * 1024  # 10 MB default limit
+
+    # Telephony configuration
+    TWILIO_ACCOUNT_SID: str = ""
+    TWILIO_AUTH_TOKEN: str = ""
+    TWILIO_FROM_NUMBER: str = ""
+
+    # AI & Speech Providers
+    GEMINI_API_KEY: str = ""
+    DEEPGRAM_API_KEY: str = ""
+    ELEVENLABS_API_KEY: str = ""
+
+    # Optional ElevenLabs voice settings
+    ELEVENLABS_VOICE_ID: str = "21m00Tcm4TlvDq8ikWAM"  # Default "Rachel" voice
+
+    # Server configuration for Ngrok/public access (without https://)
+    SERVER_DOMAIN: str = ""
+
+    # Optional signature validation toggle (default True in production, can disable if testing locally without webhook signatures)
+    VERIFY_TWILIO_SIGNATURE: bool = True
 
 settings = Settings()
 
@@ -226,24 +527,35 @@ FILE: backend/app/services/csv_processor.py
 ================================================
 import csv
 import re
-from typing import TextIO, List, Tuple
+import sys
+from typing import TextIO, List
 from fastapi import HTTPException
 from backend.app.schemas.leads import CsvProcessingResponse, AcceptedLead, RejectedRow
 
 REQUIRED_HEADERS = {"name", "phone"}
 
+# Pre-compiled regular expressions for maximum row-processing throughput
+RE_PHONE_STRIP = re.compile(r'[\s\-\(\)\.]')
+RE_E164 = re.compile(r'^\+[1-9]\d{7,14}$')
+
+# Increase CSV field size limit to handle large freeform values safely
+try:
+    csv.field_size_limit(sys.maxsize)
+except OverflowError:
+    csv.field_size_limit(2147483647)
+
 def normalize_header(header: str) -> str:
     return header.strip().lower().replace(" ", "_")
 
 def normalize_phone(phone: str) -> str:
-    phone = re.sub(r'[\s\-\(\)\.]', '', phone)
+    phone = RE_PHONE_STRIP.sub('', phone)
     if phone.startswith("00"):
         phone = "+" + phone[2:]
     return phone
 
 def is_valid_phone(phone: str) -> bool:
     # E.164: + followed by 8-15 digits, first digit non-zero
-    return bool(re.match(r'^\+[1-9]\d{7,14}$', phone))
+    return bool(RE_E164.match(phone))
 
 def process_csv(file_obj: TextIO, agent_id: str) -> CsvProcessingResponse:
     try:
@@ -321,7 +633,7 @@ def process_csv(file_obj: TextIO, agent_id: str) -> CsvProcessingResponse:
                     )
                 )
 
-        if row_number == 1: # Only header was read
+        if len(accepted_leads) + len(rejected_rows) == 0:
             raise HTTPException(status_code=400, detail="File contains no data rows.")
 
         return CsvProcessingResponse(
@@ -334,8 +646,305 @@ def process_csv(file_obj: TextIO, agent_id: str) -> CsvProcessingResponse:
             rejected_rows=rejected_rows
         )
 
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
     except csv.Error as e:
         raise HTTPException(status_code=400, detail=f"Malformed CSV: {str(e)}")
+
+
+
+================================================
+FILE: backend/app/services/telephony.py
+================================================
+import json
+import base64
+import asyncio
+import logging
+from typing import Optional, List
+from twilio.rest import Client
+from fastapi import WebSocket, WebSocketDisconnect
+import google.generativeai as genai
+from deepgram import AsyncDeepgramClient
+from deepgram.core.events import EventType
+from deepgram.listen.v1.types.listen_v1results import ListenV1Results
+from elevenlabs.client import AsyncElevenLabs
+
+# Import audioop safely (supporting Python 3.13+ if audioop-lts is installed)
+try:
+    import audioop
+except ImportError:
+    try:
+        import audioop_lts as audioop  # type: ignore
+    except ImportError:
+        raise ImportError(
+            "audioop is required for Twilio mu-law audio conversion. "
+            "Please ensure you are running on Python <= 3.12 or install 'audioop-lts'."
+        )
+
+from backend.app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+class TwilioProvider:
+    def __init__(self):
+        # Audio configuration
+        self.twilio_sample_rate = 8000
+        self.sample_width = 2  # 16-bit linear PCM width
+
+        # Initialize Google Generative AI client once if API key is present
+        if settings.GEMINI_API_KEY:
+            genai.configure(api_key=settings.GEMINI_API_KEY)
+
+    @property
+    def client(self) -> Optional[Client]:
+        """Dynamically instantiate or reuse Twilio Client so .env changes are respected."""
+        if settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN:
+            return Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+        return None
+
+    def trigger_call(self, to_number: str) -> str:
+        client = self.client
+        if not client:
+            raise ValueError("TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be configured in .env.")
+
+        if not settings.TWILIO_FROM_NUMBER:
+            raise ValueError("TWILIO_FROM_NUMBER must be configured in .env.")
+
+        if not settings.SERVER_DOMAIN:
+            raise ValueError("SERVER_DOMAIN is not set. A public domain (e.g. ngrok) is required for Twilio webhooks.")
+
+        # Strip any accidental http:// or https:// from domain
+        clean_domain = settings.SERVER_DOMAIN.replace("https://", "").replace("http://", "").strip("/")
+        twiml_url = f"https://{clean_domain}{settings.api_v1_str}/calls/twiml"
+
+        call = client.calls.create(
+            to=to_number,
+            from_=settings.TWILIO_FROM_NUMBER,
+            url=twiml_url
+        )
+        return call.sid
+
+    async def _generate_llm_response(self, chat_session, user_text: str) -> str:
+        """Query standard Gemini 2.0 Flash via text prompting."""
+        try:
+            response = await chat_session.send_message_async(user_text)
+            return response.text.strip() if response and response.text else ""
+        except Exception as e:
+            logger.error(f"Gemini LLM error: {e}")
+            return "I apologize, I had trouble processing that. Could you please repeat?"
+
+    async def _synthesize_and_stream_to_twilio(
+        self,
+        text: str,
+        eleven_client: AsyncElevenLabs,
+        twilio_ws: WebSocket,
+        stream_sid: str
+    ):
+        """
+        Sends text to ElevenLabs TTS and streams the resulting audio back to Twilio.
+        Requests ulaw_8000 format directly if possible, or resamples PCM 16kHz to 8kHz mu-law.
+        """
+        if not text.strip():
+            return
+
+        try:
+            voice_id = settings.ELEVENLABS_VOICE_ID or "21m00Tcm4TlvDq8ikWAM"
+            
+            # Request ulaw_8000 directly from ElevenLabs for optimal latency and zero resampling overhead
+            audio_stream = eleven_client.text_to_speech.convert(
+                voice_id=voice_id,
+                text=text,
+                output_format="ulaw_8000",
+                model_id="eleven_turbo_v2_5"
+            )
+
+            # Send in 20ms chunks (160 bytes for 8kHz mu-law) to preserve Twilio telephony pacing
+            chunk_size = 160
+            buffer = bytearray()
+
+            async for chunk in audio_stream:
+                if not chunk:
+                    continue
+                buffer.extend(chunk)
+
+                while len(buffer) >= chunk_size:
+                    slice_data = bytes(buffer[:chunk_size])
+                    del buffer[:chunk_size]
+
+                    media_msg = {
+                        "event": "media",
+                        "streamSid": stream_sid,
+                        "media": {
+                            "payload": base64.b64encode(slice_data).decode("utf-8")
+                        }
+                    }
+                    await twilio_ws.send_json(media_msg)
+                    await asyncio.sleep(0.018)  # Pace at ~20ms per 160-byte audio frame
+
+            # Flush any remaining audio in buffer
+            if buffer:
+                media_msg = {
+                    "event": "media",
+                    "streamSid": stream_sid,
+                    "media": {
+                        "payload": base64.b64encode(bytes(buffer)).decode("utf-8")
+                    }
+                }
+                await twilio_ws.send_json(media_msg)
+
+        except Exception as e:
+            logger.error(f"ElevenLabs TTS / Twilio playback error: {e}")
+
+    async def handle_media_stream(self, twilio_ws: WebSocket):
+        """
+        Accepts Twilio WebSocket and runs a chained pipeline:
+        1. STT: Streams Twilio 8kHz mu-law audio to Deepgram Live WebSocket.
+        2. LLM: Triggers Gemini 2.0 Flash REST upon speech_final / is_final detection.
+        3. TTS: Synthesizes response using ElevenLabs and streams 8kHz mu-law back to Twilio.
+        """
+        await twilio_ws.accept()
+
+        # Validate necessary API keys
+        if not settings.DEEPGRAM_API_KEY:
+            logger.error("DEEPGRAM_API_KEY is not configured in .env.")
+            await twilio_ws.close(code=1008, reason="DEEPGRAM_API_KEY is not configured.")
+            return
+
+        if not settings.GEMINI_API_KEY:
+            logger.error("GEMINI_API_KEY is not configured in .env.")
+            await twilio_ws.close(code=1008, reason="GEMINI_API_KEY is not configured.")
+            return
+
+        if not settings.ELEVENLABS_API_KEY:
+            logger.error("ELEVENLABS_API_KEY is not configured in .env.")
+            await twilio_ws.close(code=1008, reason="ELEVENLABS_API_KEY is not configured.")
+            return
+
+        # Initialize Clients
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        model = genai.GenerativeModel(
+            model_name="gemini-3.1-flash-lite",
+            system_instruction=(
+                "You are an AI phone assistant for an inbound/outbound call. "
+                "Keep responses concise, natural, conversational, and direct (1-2 sentences), "
+                "suitable for spoken conversation over a phone call."
+            )
+        )
+        chat_session = model.start_chat(history=[])
+
+        dg_client = AsyncDeepgramClient(api_key=settings.DEEPGRAM_API_KEY)
+        eleven_client = AsyncElevenLabs(api_key=settings.ELEVENLABS_API_KEY)
+
+        stream_sid: Optional[str] = None
+        stream_ready = asyncio.Event()
+        processing_lock = asyncio.Lock()
+
+        # Connect to Deepgram Live WebSocket configured for 8kHz mu-law
+        try:
+            async with dg_client.listen.v1.connect(
+                model="nova-2",
+                encoding="mulaw",
+                sample_rate=8000,
+                channels=1,
+                endpointing=300,
+                smart_format=True
+            ) as dg_socket:
+
+                # Callback for Deepgram transcription results
+                async def on_deepgram_message(message):
+                    nonlocal stream_sid
+                    try:
+                        if not isinstance(message, ListenV1Results):
+                            return
+
+                        is_final = getattr(message, "is_final", False)
+                        speech_final = getattr(message, "speech_final", False)
+
+                        if not (is_final or speech_final):
+                            return
+
+                        channel = getattr(message, "channel", None)
+                        if not channel or not channel.alternatives:
+                            return
+
+                        transcript = channel.alternatives[0].transcript.strip()
+                        if not transcript:
+                            return
+
+                        logger.info(f"User Transcribed: {transcript} (speech_final={speech_final}, is_final={is_final})")
+
+                        # Trigger LLM -> TTS pipeline asynchronously under lock to avoid overlapping audio
+                        async def run_pipeline():
+                            async with processing_lock:
+                                if not stream_sid:
+                                    return
+                                # 1. Query Gemini text LLM
+                                reply_text = await self._generate_llm_response(chat_session, transcript)
+                                logger.info(f"AI Response: {reply_text}")
+
+                                # 2. Synthesize with ElevenLabs and stream to Twilio
+                                await self._synthesize_and_stream_to_twilio(
+                                    reply_text,
+                                    eleven_client,
+                                    twilio_ws,
+                                    stream_sid
+                                )
+
+                        asyncio.create_task(run_pipeline())
+
+                    except Exception as e:
+                        logger.error(f"Error processing Deepgram message: {e}")
+
+                dg_socket.on(EventType.MESSAGE, on_deepgram_message)
+
+                # Start Deepgram listener task
+                dg_listener_task = asyncio.create_task(dg_socket.start_listening())
+
+                # Task to read audio from Twilio and pipe into Deepgram
+                async def twilio_to_deepgram():
+                    nonlocal stream_sid
+                    try:
+                        while True:
+                            msg = await twilio_ws.receive_json()
+                            event = msg.get("event")
+
+                            if event == "start":
+                                stream_sid = msg["start"]["streamSid"]
+                                stream_ready.set()
+                                logger.info(f"Twilio stream started with streamSid: {stream_sid}")
+                            elif event == "media":
+                                payload = msg["media"]["payload"]
+                                audio_mulaw = base64.b64decode(payload)
+                                # Send raw 8kHz mu-law audio directly to Deepgram
+                                await dg_socket.send_media(audio_mulaw)
+                            elif event == "stop":
+                                logger.info(f"Twilio stream stopped: {stream_sid}")
+                                break
+
+                    except WebSocketDisconnect:
+                        logger.info("Twilio WebSocket disconnected.")
+                    except Exception as e:
+                        logger.error(f"Error in twilio_to_deepgram: {e}")
+
+                twilio_task = asyncio.create_task(twilio_to_deepgram())
+
+                # Wait until Twilio or Deepgram completes
+                done, pending = await asyncio.wait(
+                    [twilio_task, dg_listener_task],
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+
+                for task in pending:
+                    task.cancel()
+
+        except Exception as e:
+            logger.error(f"Error during audio stream processing: {e}")
+            try:
+                await twilio_ws.close()
+            except Exception:
+                pass
+
+telephony_provider = TwilioProvider()
 
 
 
@@ -349,8 +958,10 @@ FILE: backend/tests/__init__.py
 FILE: backend/tests/test_csv_upload.py
 ================================================
 import pytest
+from pathlib import Path
 from fastapi.testclient import TestClient
 from backend.app.main import app
+from backend.app.core.config import settings
 
 client = TestClient(app)
 
@@ -432,15 +1043,18 @@ def test_empty_files_and_header_only_files():
     assert response.status_code == 400
     assert "no data rows" in response.json()["detail"]
 
+    # Header followed only by blank lines
+    files = {"file": ("test.csv", "Name,Phone\n\n   \n", "text/csv")}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 400
+    assert "no data rows" in response.json()["detail"]
+
 def test_malformed_csv_input():
-    # In complete quotes usually causes issues in csv parser, wait actually python csv can handle some
-    # Let's test with null bytes
+    # Null byte or bad encoding test
     csv_content = b"Name,Phone\n\0,123"
     files = {"file": ("test.csv", csv_content, "text/csv")}
     data = {"agent_id": AGENT_ID}
     response = client.post(ENDPOINT, files=files, data=data)
-    # csv error might happen or might just process null
-    # But let's check a typical malformed error if csv module throws
     if response.status_code == 400:
         assert "Malformed CSV" in response.json()["detail"] or "must be UTF-8" in response.json()["detail"] or "null" in response.text
 
@@ -536,14 +1150,991 @@ def test_bom_handling():
     assert res["accepted_leads"][0]["name"] == "Rahul"
 
 def test_verification_no_db_external():
-    # Check that there is no obvious mock/patch needed to make this test work
-    # We are not creating a db or making http calls in the endpoint
-    # This is more of an architectural check, but we run a simple request to confirm it's fast and pure
     csv_content = "Name,Phone\nRahul,+919876543210"
     files = {"file": ("test.csv", csv_content, "text/csv")}
     data = {"agent_id": AGENT_ID}
     response = client.post(ENDPOINT, files=files, data=data)
     assert response.status_code == 200
+
+def test_uppercase_csv_extension_allowed():
+    csv_content = "Name,Phone\nRahul,+919876543210"
+    files = {"file": ("test.CSV", csv_content, "application/octet-stream")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 200
+    assert response.json()["accepted_count"] == 1
+
+def test_oversized_file_rejected(monkeypatch):
+    monkeypatch.setattr(settings, "max_upload_size_bytes", 100)
+    csv_content = "Name,Phone\n" + ("Rahul,+919876543210\n" * 10)
+    files = {"file": ("test.csv", csv_content, "text/csv")}
+    data = {"agent_id": AGENT_ID}
+    response = client.post(ENDPOINT, files=files, data=data)
+    assert response.status_code == 413
+    assert "exceeds maximum allowed size" in response.json()["detail"]
+
+def test_health_check():
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "healthy"
+
+def test_user_test_leads_file():
+    test_file = Path(__file__).parent / "test data" / "test_leads.csv"
+    if test_file.exists():
+        with open(test_file, "rb") as f:
+            response = client.post(ENDPOINT, files={"file": ("test_leads.csv", f, "text/csv")}, data={"agent_id": AGENT_ID})
+        assert response.status_code == 200
+        res = response.json()
+        assert res["accepted_count"] == 3
+        assert res["rejected_count"] == 3
+        assert res["total_rows"] == 6
+
+def test_user_stress_test_leads_file():
+    stress_file = Path(__file__).parent / "test data" / "stress_test_leads.csv"
+    if stress_file.exists():
+        with open(stress_file, "rb") as f:
+            response = client.post(ENDPOINT, files={"file": ("stress_test_leads.csv", f, "text/csv")}, data={"agent_id": AGENT_ID})
+        assert response.status_code == 200
+        res = response.json()
+        assert res["accepted_count"] == 13
+        assert res["rejected_count"] == 10
+        assert res["total_rows"] == 23
+
+
+
+================================================
+FILE: backend/tests/test data/stress_test_leads.csv
+================================================
+ï»¿ Name , Phone , Email , City , Lead Score , Notes 
+Aarav Patel, +91 98765 43210 , aarav@example.com , Mumbai , 85 , Interested in enterprise plan
+Emma Watson , +1 (212) 555-0198 , emma@example.com , New York , 92 , Callback requested at 4 PM
+Lukas Becker , 004915123456789 , lukas@example.de , Berlin , 70 , Prefers WhatsApp
+Yuki Tanaka , +81.90.1234.5679 , yuki@example.jp , Tokyo , 99 , Urgent follow-up
+Sophie Martin , +33-6-12-34-56-78 , sophie@example.fr , Paris , 65 , Existing client
+Liam O'Connor , +353-87-1234567 , liam@example.ie , Dublin , 80 , Inbound demo request
+
+David Miller , 001-202-555-0143 , david@example.com , Washington , 78 , Uses 00 US prefix
+Priya Nair , +91 (080) 2345-6789 , priya@example.com , Bengaluru , 88 , Landline format with valid length
+Fatima Al-Mansoor , +971-50-123-4567 , fatima@example.ae , Dubai , 95 , High priority
+Carlos Silva , +55 11 91234-5678 , carlos@example.br , Sao Paulo , 55 , Follow up next week
+   ,   ,   ,   ,   ,   
+Elena Rostova , +7 (916) 123-45-67 , elena@example.ru , Moscow , 60 , 
+Kavita Rao , +919876543211 , kavita@example.com , Hyderabad , 90 , Minimal extra fields
+
+, +919876543212 , noname@example.com , Chennai , 40 , Should reject: empty name
+   , +12025550188 , spaces@example.com , Boston , 45 , Should reject: whitespace-only name
+John Doe , 9876543210 , john@example.com , Delhi , 50 , Should reject: missing + country code
+Jane Smith , +0123456789 , jane@example.com , Austin , 60 , Should reject: country code starts with 0
+Bob Vance , +12345 , bob@example.com , Scranton , 30 , Should reject: phone too short (<8 digits)
+Alice Cooper , +123456789012345678 , alice@example.com , Detroit , 75 , Should reject: phone too long (>15 digits)
+Victor Vance , +9198765CALLME , victor@example.com , Miami , 50 , Should reject: alphanumeric phone
+Bruce Wayne , +12025550100 , bruce@wayne.com , Gotham , 100
+Clark Kent , +12025550101 , clark@dailyplanet.com , Metropolis , 100 , Extra1 , Extra2
+Arthur Dent , +442079460919 , arthur@example.co.uk , London , 42 , Missing required name and invalid phone test lead
+ , 0000000000 , invalid@example.com , Nowhere , 0 , Should reject: both name empty and phone invalid
+
+
+
+================================================
+FILE: backend/tests/test data/test_leads.csv
+================================================
+ï»¿Name,Phone,City,Course
+Rahul Sharma,+919876543210,Bengaluru,Computer Science
+Jane Doe, +1 (234) 567-8901 ,New York,Data Science
+Alex Smith,00447911123456,London,Machine Learning
+, +919876543211,Hyderabad,Cloud Computing
+Carlos Mendez,12345,Madrid,Robotics
+Michael Brown,+12025550199,Chicago
+
+
+
+================================================
+FILE: frontend/README.md
+================================================
+# Frontend Development Setup
+
+This project uses Vite + React + TypeScript to provide a simple web interface for uploading CSV leads.
+
+## Prerequisites
+
+- Node.js >= 18
+- npm
+
+## Setup
+
+First, ensure the frontend environment variables are configured:
+```bash
+cp .env.example .env
+```
+(Modify `VITE_API_BASE_URL` in `.env` if your backend is running on a different port/host).
+
+## Running the Frontend
+
+To install dependencies and start the development server:
+```bash
+npm install
+npm run dev --host
+```
+
+The app will typically be available at `http://localhost:5173`.
+
+
+
+================================================
+FILE: frontend/index.html
+================================================
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>frontend</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
+
+
+================================================
+FILE: frontend/package.json
+================================================
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@types/papaparse": "^5.5.2",
+    "lucide-react": "^1.64.0",
+    "papaparse": "^5.7.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "recharts": "^3.10.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "autoprefixer": "^10.6.2",
+    "oxlint": "^1.89.0",
+    "postcss": "^8.5.32",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.5"
+  }
+}
+
+
+
+================================================
+FILE: frontend/tsconfig.app.json
+================================================
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    "types": ["vite/client"],
+    "allowArbitraryExtensions": true,
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src"]
+}
+
+
+
+================================================
+FILE: frontend/tsconfig.json
+================================================
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
+}
+
+
+
+================================================
+FILE: frontend/tsconfig.node.json
+================================================
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "module": "nodenext",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+
+    /* Linting */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["vite.config.ts"]
+}
+
+
+
+================================================
+FILE: frontend/vite.config.ts
+================================================
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+
+// https://vite.dev/config/
+export default defineConfig({
+  plugins: [
+    react(),
+    tailwindcss()
+  ],
+})
+
+
+
+================================================
+FILE: frontend/.oxlintrc.json
+================================================
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["react", "typescript", "oxc"],
+  "rules": {
+    "react/rules-of-hooks": "error",
+    "react/only-export-components": ["warn", { "allowConstantExport": true }]
+  }
+}
+
+
+
+================================================
+FILE: frontend/src/App.tsx
+================================================
+import { useState } from 'react';
+import { Header } from './components/Header';
+import { UploadForm } from './components/UploadForm';
+import { Dashboard } from './components/Dashboard';
+import type { CsvProcessingResponse } from './types';
+import './index.css';
+
+function App() {
+  const [loading, setLoading] = useState<boolean>(false);
+  const [result, setResult] = useState<CsvProcessingResponse | null>(null);
+  const [globalError, setGlobalError] = useState<string>('');
+
+  const handleUpload = async (file: File, agentId: string) => {
+    setLoading(true);
+    setGlobalError('');
+    setResult(null);
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('agent_id', agentId);
+
+    const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/leads/upload-csv`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setResult(data as CsvProcessingResponse);
+      } else {
+        setGlobalError(data.detail || 'Failed to validate CSV due to server error.');
+      }
+    } catch (err) {
+      console.error(err);
+      setGlobalError('Error connecting to the validation server. Please try again later.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleReset = () => {
+    setResult(null);
+    setGlobalError('');
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-900 text-white flex flex-col font-sans selection:bg-accent/30">
+      <Header />
+
+      <main className="flex-1 flex flex-col py-12 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-7xl mx-auto w-full flex-1 flex flex-col">
+
+          {!result ? (
+            <div className="flex-1 flex flex-col items-center justify-center space-y-12 max-w-3xl mx-auto w-full animate-in fade-in slide-in-from-bottom-8 duration-700">
+              <div className="text-center space-y-4">
+                <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight text-white">
+                  Validate Your Leads
+                </h1>
+                <p className="text-lg md:text-xl text-gray-400 max-w-2xl mx-auto">
+                  Upload your CSV file to instantly clean, parse, and validate lead data before import.
+                </p>
+              </div>
+
+              <UploadForm onUpload={handleUpload} loading={loading} />
+
+              {globalError && (
+                <div className="w-full max-w-2xl p-4 bg-error/10 border border-error/20 rounded-lg text-error text-center shadow-lg shadow-error/5">
+                  <p className="font-medium">{globalError}</p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <Dashboard data={result} onReset={handleReset} />
+          )}
+
+        </div>
+      </main>
+    </div>
+  );
+}
+
+export default App;
+
+
+
+================================================
+FILE: frontend/src/index.css
+================================================
+@import "tailwindcss";
+
+@theme {
+  --color-gray-900: #0f1115;
+  --color-gray-800: #1a1d24;
+  --color-gray-700: #262a33;
+  --color-gray-600: #3a3f4d;
+  --color-accent: #6366f1;
+  --color-accent-hover: #4f46e5;
+  --color-success: #10b981;
+  --color-error: #ef4444;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-gray-900);
+  color: white;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom Scrollbar for dark theme */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-gray-900);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-gray-600);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-gray-700);
+}
+
+
+
+================================================
+FILE: frontend/src/main.tsx
+================================================
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App.tsx'
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)
+
+
+
+================================================
+FILE: frontend/src/types.ts
+================================================
+export interface RejectedRow {
+  row_number: number;
+  errors: string[];
+}
+
+export interface AcceptedLead {
+  name: string;
+  phone: string;
+  email?: string;
+  address?: string;
+  [key: string]: any;
+}
+
+export interface CsvProcessingResponse {
+  status: string;
+  agent_id: string;
+  total_rows: number;
+  accepted_count: number;
+  rejected_count: number;
+  accepted_leads: AcceptedLead[];
+  rejected_rows: RejectedRow[];
+}
+
+
+
+================================================
+FILE: frontend/src/components/Dashboard.tsx
+================================================
+import { useState } from 'react';
+import type { CsvProcessingResponse } from '../types';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
+import { CheckCircle2, XCircle, Users, Download, ArrowLeft, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import Papa from 'papaparse';
+
+interface DashboardProps {
+  data: CsvProcessingResponse;
+  onReset: () => void;
+}
+
+export function Dashboard({ data, onReset }: DashboardProps) {
+  const [activeTab, setActiveTab] = useState<'accepted' | 'rejected'>('accepted');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+
+  const total = data.total_rows || 1; // Prevent division by zero
+  const acceptPercent = Math.round((data.accepted_count / total) * 100);
+  const rejectPercent = Math.round((data.rejected_count / total) * 100);
+
+  const chartData = [
+    { name: 'Accepted', value: data.accepted_count, color: '#10b981' },
+    { name: 'Rejected', value: data.rejected_count, color: '#ef4444' },
+  ].filter(item => item.value > 0);
+
+  const handleExportRejected = () => {
+    if (data.rejected_rows.length === 0) return;
+    const exportData = data.rejected_rows.map(row => ({
+      'Row Number': row.row_number,
+      'Errors': row.errors.join(' | ')
+    }));
+    const csv = Papa.unparse(exportData);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `rejected_rows_agent_${data.agent_id}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const filteredAccepted = data.accepted_leads.filter(lead =>
+    Object.values(lead).some(val =>
+      String(val).toLowerCase().includes(searchTerm.toLowerCase())
+    )
+  );
+
+  const filteredRejected = data.rejected_rows.filter(row =>
+    row.row_number.toString().includes(searchTerm) ||
+    row.errors.some(err => err.toLowerCase().includes(searchTerm.toLowerCase()))
+  );
+
+  const currentData = activeTab === 'accepted' ? filteredAccepted : filteredRejected;
+  const totalPages = Math.max(1, Math.ceil(currentData.length / itemsPerPage));
+  const paginatedData = currentData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+  const handlePageChange = (newPage: number) => {
+    if (newPage >= 1 && newPage <= totalPages) {
+      setCurrentPage(newPage);
+    }
+  };
+
+  return (
+    <div className="w-full max-w-6xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-white">Validation Results</h2>
+          <p className="text-gray-400 mt-1">Agent ID: <span className="text-gray-200 font-medium">{data.agent_id}</span></p>
+        </div>
+        <button
+          onClick={onReset}
+          className="flex items-center space-x-2 text-gray-400 hover:text-white transition-colors bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded-lg border border-gray-700"
+        >
+          <ArrowLeft size={16} />
+          <span>Upload Another</span>
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="bg-gray-800 border border-gray-700 rounded-xl p-6 flex flex-col justify-center">
+          <div className="flex items-center space-x-3 text-gray-400 mb-2">
+            <Users size={20} />
+            <h3 className="font-medium">Total Rows</h3>
+          </div>
+          <p className="text-4xl font-bold text-white">{data.total_rows}</p>
+        </div>
+
+        <div className="bg-gray-800 border border-gray-700 rounded-xl p-6 flex flex-col justify-center relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-success/5 rounded-full -mr-16 -mt-16 blur-2xl"></div>
+          <div className="flex items-center space-x-3 text-gray-400 mb-2 relative z-10">
+            <CheckCircle2 size={20} className="text-success" />
+            <h3 className="font-medium">Accepted</h3>
+          </div>
+          <div className="flex items-end space-x-3 relative z-10">
+            <p className="text-4xl font-bold text-white">{data.accepted_count}</p>
+            <p className="text-success font-medium mb-1">{acceptPercent}%</p>
+          </div>
+        </div>
+
+        <div className="bg-gray-800 border border-gray-700 rounded-xl p-6 flex flex-col justify-center relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-error/5 rounded-full -mr-16 -mt-16 blur-2xl"></div>
+          <div className="flex items-center space-x-3 text-gray-400 mb-2 relative z-10">
+            <XCircle size={20} className="text-error" />
+            <h3 className="font-medium">Rejected</h3>
+          </div>
+          <div className="flex items-end space-x-3 relative z-10">
+            <p className="text-4xl font-bold text-white">{data.rejected_count}</p>
+            <p className="text-error font-medium mb-1">{rejectPercent}%</p>
+          </div>
+        </div>
+
+        <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 h-32 md:h-auto flex items-center justify-center">
+          {data.total_rows > 0 ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={chartData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={30}
+                  outerRadius={45}
+                  paddingAngle={5}
+                  dataKey="value"
+                  stroke="none"
+                >
+                  {chartData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  contentStyle={{ backgroundColor: '#1a1d24', borderColor: '#262a33', borderRadius: '8px', color: 'white' }}
+                  itemStyle={{ color: 'white' }}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="text-gray-500 text-sm">No data to chart</p>
+          )}
+        </div>
+      </div>
+
+      <div className="bg-gray-800 border border-gray-700 rounded-xl overflow-hidden flex flex-col">
+        <div className="flex flex-col sm:flex-row border-b border-gray-700 p-4 gap-4 justify-between items-center bg-gray-900/30">
+          <div className="flex space-x-2 w-full sm:w-auto">
+            <button
+              onClick={() => { setActiveTab('accepted'); setCurrentPage(1); setSearchTerm(''); }}
+              className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                activeTab === 'accepted'
+                  ? 'bg-success/20 text-success border border-success/30'
+                  : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700'
+              }`}
+            >
+              Accepted ({data.accepted_count})
+            </button>
+            <button
+              onClick={() => { setActiveTab('rejected'); setCurrentPage(1); setSearchTerm(''); }}
+              className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                activeTab === 'rejected'
+                  ? 'bg-error/20 text-error border border-error/30'
+                  : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700'
+              }`}
+            >
+              Rejected ({data.rejected_count})
+            </button>
+          </div>
+
+          <div className="flex w-full sm:w-auto space-x-3">
+            <div className="relative w-full sm:w-64">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500">
+                <Search size={16} />
+              </div>
+              <input
+                type="text"
+                placeholder="Search..."
+                value={searchTerm}
+                onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg pl-10 pr-4 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-accent focus:border-accent"
+              />
+            </div>
+
+            {activeTab === 'rejected' && data.rejected_count > 0 && (
+              <button
+                onClick={handleExportRejected}
+                title="Export Rejected Rows"
+                className="flex items-center justify-center p-2 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-lg text-white transition-colors whitespace-nowrap"
+              >
+                <Download size={18} />
+                <span className="ml-2 text-sm hidden sm:inline">Export</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="overflow-x-auto min-h-[300px]">
+          {paginatedData.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-64 text-gray-500">
+              <p>No results found.</p>
+            </div>
+          ) : (
+            <table className="w-full text-left border-collapse">
+              <thead className="bg-gray-900/50 text-gray-400 text-xs uppercase font-semibold">
+                {activeTab === 'accepted' ? (
+                  <tr>
+                    <th className="px-6 py-4 border-b border-gray-700">Name</th>
+                    <th className="px-6 py-4 border-b border-gray-700">Phone</th>
+                    <th className="px-6 py-4 border-b border-gray-700">Other Details</th>
+                  </tr>
+                ) : (
+                  <tr>
+                    <th className="px-6 py-4 border-b border-gray-700 w-24">Row</th>
+                    <th className="px-6 py-4 border-b border-gray-700">Rejection Reasons</th>
+                  </tr>
+                )}
+              </thead>
+              <tbody className="text-sm divide-y divide-gray-700/50">
+                {activeTab === 'accepted' ? (
+                  (paginatedData as any[]).map((lead, idx) => (
+                    <tr key={idx} className="hover:bg-gray-700/30 transition-colors">
+                      <td className="px-6 py-4 text-gray-200 font-medium">{lead.name || '-'}</td>
+                      <td className="px-6 py-4 text-gray-300">{lead.phone || '-'}</td>
+                      <td className="px-6 py-4 text-gray-400">
+                        {Object.entries(lead)
+                          .filter(([k]) => k !== 'name' && k !== 'phone')
+                          .map(([k, v]) => `${k}: ${v}`)
+                          .join(', ') || '-'}
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  (paginatedData as any[]).map((row, idx) => (
+                    <tr key={idx} className="hover:bg-gray-700/30 transition-colors">
+                      <td className="px-6 py-4 text-gray-400 font-mono">#{row.row_number}</td>
+                      <td className="px-6 py-4">
+                        <ul className="list-disc list-inside text-error space-y-1">
+                          {row.errors.map((err: string, i: number) => (
+                            <li key={i}>{err}</li>
+                          ))}
+                        </ul>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between px-6 py-4 border-t border-gray-700 bg-gray-900/30">
+            <p className="text-sm text-gray-400">
+              Showing <span className="font-medium text-gray-200">{(currentPage - 1) * itemsPerPage + 1}</span> to <span className="font-medium text-gray-200">{Math.min(currentPage * itemsPerPage, currentData.length)}</span> of <span className="font-medium text-gray-200">{currentData.length}</span> results
+            </p>
+            <div className="flex space-x-2">
+              <button
+                onClick={() => handlePageChange(currentPage - 1)}
+                disabled={currentPage === 1}
+                className="p-1 rounded-md text-gray-400 hover:text-white hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                <ChevronLeft size={20} />
+              </button>
+              <button
+                onClick={() => handlePageChange(currentPage + 1)}
+                disabled={currentPage === totalPages}
+                className="p-1 rounded-md text-gray-400 hover:text-white hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                <ChevronRight size={20} />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+
+================================================
+FILE: frontend/src/components/Header.tsx
+================================================
+import { PhoneCall } from 'lucide-react';
+
+export function Header() {
+  return (
+    <header className="border-b border-gray-800 bg-gray-900/50 backdrop-blur-sm sticky top-0 z-10">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex items-center justify-between h-16">
+          <div className="flex items-center space-x-3">
+            <div className="bg-accent/10 p-2 rounded-lg text-accent">
+              <PhoneCall size={24} />
+            </div>
+            <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
+              Caller-AI
+            </span>
+          </div>
+          <div className="text-sm text-gray-400 font-medium px-3 py-1 rounded-full bg-gray-800 border border-gray-700">
+            Lead Validation Portal
+          </div>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+
+
+================================================
+FILE: frontend/src/components/UploadForm.tsx
+================================================
+import React, { useState, useRef } from 'react';
+import { UploadCloud, FileType, AlertCircle, Loader2 } from 'lucide-react';
+
+interface UploadFormProps {
+  onUpload: (file: File, agentId: string) => Promise<void>;
+  loading: boolean;
+}
+
+export function UploadForm({ onUpload, loading }: UploadFormProps) {
+  const [file, setFile] = useState<File | null>(null);
+  const [agentId, setAgentId] = useState<string>('');
+  const [dragActive, setDragActive] = useState<boolean>(false);
+  const [error, setError] = useState<string>('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const droppedFile = e.dataTransfer.files[0];
+      if (droppedFile.name.endsWith('.csv')) {
+        setFile(droppedFile);
+        setError('');
+      } else {
+        setError('Please upload a valid .csv file');
+      }
+    }
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    if (e.target.files && e.target.files[0]) {
+      const selectedFile = e.target.files[0];
+      if (selectedFile.name.endsWith('.csv')) {
+        setFile(selectedFile);
+        setError('');
+      } else {
+        setError('Please upload a valid .csv file');
+      }
+    }
+  };
+
+  const onButtonClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!file) {
+      setError('Please select a file to upload');
+      return;
+    }
+    if (!agentId.trim()) {
+      setError('Agent ID is required');
+      return;
+    }
+    setError('');
+    onUpload(file, agentId);
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="w-full max-w-2xl mx-auto space-y-6">
+      <div className="space-y-2">
+        <label htmlFor="agentId" className="block text-sm font-medium text-gray-300">
+          Agent ID
+        </label>
+        <input
+          type="text"
+          id="agentId"
+          value={agentId}
+          onChange={(e) => setAgentId(e.target.value)}
+          placeholder="e.g. agt_12345"
+          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent transition-all"
+          disabled={loading}
+        />
+      </div>
+
+      <div className="space-y-2">
+        <label className="block text-sm font-medium text-gray-300">
+          Lead Data (CSV)
+        </label>
+        <div
+          className={`relative border-2 border-dashed rounded-xl p-8 transition-all ${
+            dragActive
+              ? 'border-accent bg-accent/10'
+              : 'border-gray-700 bg-gray-800/50 hover:bg-gray-800'
+          } ${file ? 'border-success/50 bg-success/5' : ''}`}
+          onDragEnter={handleDrag}
+          onDragLeave={handleDrag}
+          onDragOver={handleDrag}
+          onDrop={handleDrop}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv"
+            onChange={handleChange}
+            className="hidden"
+            disabled={loading}
+          />
+
+          <div className="flex flex-col items-center justify-center text-center space-y-4">
+            {file ? (
+              <>
+                <div className="p-3 bg-success/20 rounded-full text-success">
+                  <FileType size={32} />
+                </div>
+                <div>
+                  <p className="text-white font-medium">{file.name}</p>
+                  <p className="text-sm text-gray-400 mt-1">{formatFileSize(file.size)}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setFile(null); }}
+                  className="text-sm text-red-400 hover:text-red-300 transition-colors"
+                  disabled={loading}
+                >
+                  Remove file
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="p-4 bg-gray-800 rounded-full text-gray-400">
+                  <UploadCloud size={40} />
+                </div>
+                <div>
+                  <p className="text-lg font-medium text-gray-200">
+                    Drag & drop your CSV here
+                  </p>
+                  <p className="text-sm text-gray-400 mt-2">
+                    or{' '}
+                    <button
+                      type="button"
+                      onClick={onButtonClick}
+                      className="text-accent hover:text-accent-hover font-medium transition-colors"
+                      disabled={loading}
+                    >
+                      browse your files
+                    </button>
+                  </p>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {error && (
+        <div className="flex items-center space-x-2 text-error text-sm p-3 bg-error/10 rounded-lg border border-error/20">
+          <AlertCircle size={16} />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <button
+        type="submit"
+        disabled={loading || !file || !agentId.trim()}
+        className={`w-full py-4 rounded-lg font-medium text-lg flex items-center justify-center space-x-2 transition-all ${
+          loading || !file || !agentId.trim()
+            ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+            : 'bg-accent hover:bg-accent-hover text-white shadow-lg shadow-accent/20'
+        }`}
+      >
+        {loading ? (
+          <>
+            <Loader2 className="animate-spin" size={24} />
+            <span>Validating Leads...</span>
+          </>
+        ) : (
+          <span>Validate Leads</span>
+        )}
+      </button>
+    </form>
+  );
+}
 
 
 
@@ -613,6 +2204,59 @@ def main():
         print_message(f"Failed to install dependencies: {e}", is_error=True)
         print_message(e.stderr, is_error=True)
         sys.exit(1)
+
+
+
+    # 3. Create Root .env if it doesn't exist
+    root_env_file = root_dir / ".env"
+    if not root_env_file.exists():
+        print_message(f"Generating root .env template at {root_env_file}...")
+        try:
+            with open(root_env_file, "w") as f:
+                f.write("# Telephony & Gemini Configurations\n")
+                f.write("TWILIO_ACCOUNT_SID=\n")
+                f.write("TWILIO_AUTH_TOKEN=\n")
+                f.write("TWILIO_FROM_NUMBER=\n")
+                f.write("GEMINI_API_KEY=\n")
+                f.write("SERVER_DOMAIN=\n")
+            print_message("Root .env template created.")
+        except Exception as e:
+            print_message(f"Failed to create root .env file: {e}", is_error=True)
+
+    # 4. Setup Frontend
+    frontend_dir = root_dir / "frontend"
+    if frontend_dir.exists() and (frontend_dir / "package.json").exists():
+        print_message("Found frontend directory. Checking for Node.js...")
+        try:
+            subprocess.run(["node", "--version"], check=True, capture_output=True, text=True)
+            subprocess.run(["npm", "--version"], check=True, capture_output=True, text=True)
+
+            print_message("Installing frontend dependencies...")
+            subprocess.run(
+                ["npm", "install"],
+                cwd=frontend_dir,
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            print_message("Frontend dependencies installed successfully.")
+
+            # Copy .env.example to .env if .env doesn't exist
+            env_example = frontend_dir / ".env.example"
+            env_file = frontend_dir / ".env"
+            if env_example.exists() and not env_file.exists():
+                import shutil
+                shutil.copy(env_example, env_file)
+                print_message("Created frontend/.env from frontend/.env.example")
+
+        except FileNotFoundError:
+            print_message("Node.js or npm not found. Skipping frontend setup.", is_error=True)
+        except subprocess.CalledProcessError as e:
+            print_message(f"Failed to setup frontend: {e}", is_error=True)
+            print_message(e.stderr, is_error=True)
+            sys.exit(1)
+    else:
+        print_message("No frontend directory with package.json found. Skipping frontend setup.")
 
     print_message("Setup completed successfully.")
 

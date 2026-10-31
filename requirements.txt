@@ -7,3 +7,5 @@ pytest>=7.0.0
 httpx>=0.24.0
 twilio>=9.0.0
 websockets>=12.0
+google-generativeai>=0.8.0
+deepgram-sdk>=3.0.0
