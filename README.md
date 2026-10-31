@@ -97,9 +97,35 @@ The frontend web app will typically be available at `http://localhost:5173`.
 
 ### Required Environment Variables
 
+**Backend (Root `.env`)**:
+A `.env` file is generated in the root directory during setup for Telephony & Gemini variables. You must populate it with your credentials:
+- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`: Get these from your Twilio Console.
+- `GEMINI_API_KEY`: Get this from Google AI Studio.
+- `SERVER_DOMAIN`: The public domain of your backend (e.g., `your-subdomain.ngrok-free.app`). Required for Twilio to reach your local server.
+
 **Frontend**: A `.env` file is generated inside the `frontend` folder containing:
 `VITE_API_BASE_URL=http://localhost:8000`
 You can modify this if your backend listens on a different port.
+
+### Real-Time Voice Calls
+
+The backend now supports real-time voice calls by bridging Twilio WebSockets directly with the Gemini Multimodal Live API.
+
+1. **Expose Localhost via ngrok**:
+   To receive Twilio Webhooks on your local machine, run:
+   ```bash
+   ngrok http 8000
+   ```
+   Then set `SERVER_DOMAIN` in your root `.env` to the ngrok forwarding domain (e.g., `1234-abcd.ngrok-free.app`), without `http://` or `https://`.
+
+2. **Triggering a Call**:
+   You can trigger a call by sending a POST request to `/api/v1/calls/trigger-call`:
+   ```json
+   {
+       "phone_number": "+1234567890"
+   }
+   ```
+   When the user answers, Twilio requests TwiML from `/api/v1/calls/twiml`, which connects them to the `/api/v1/calls/media-stream` WebSocket for a real-time conversation powered by Gemini!
 
 ### CSV Upload Workflow
 
