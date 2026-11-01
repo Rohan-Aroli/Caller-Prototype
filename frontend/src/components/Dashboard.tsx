@@ -79,6 +79,29 @@ export function Dashboard({ data, onReset }: DashboardProps) {
         </button>
       </div>
 
+      {data.batch_id && (
+        <div className="bg-gradient-to-r from-emerald-950/70 via-gray-800 to-gray-800 border border-emerald-500/40 rounded-xl p-5 flex flex-col md:flex-row items-center justify-between gap-4 shadow-xl">
+          <div className="space-y-1 text-center md:text-left">
+            <div className="flex items-center gap-2 justify-center md:justify-start">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              <h3 className="font-semibold text-white text-lg">AI Outbound Calling In Progress</h3>
+            </div>
+            <p className="text-gray-300 text-sm">
+              Twilio outbound voice calls are dispatched. Prospects are evaluated by Gemini and scores are saved to CSV.
+            </p>
+            <p className="text-xs text-emerald-400/80 font-mono">Batch ID: {data.batch_id}</p>
+          </div>
+          <a
+            href={`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/v1/leads/download-results/${data.batch_id}`}
+            download
+            className="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-5 py-2.5 rounded-lg shadow-md transition-all shrink-0 cursor-pointer"
+          >
+            <Download size={18} />
+            <span>Download Evaluated Results CSV</span>
+          </a>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="bg-gray-800 border border-gray-700 rounded-xl p-6 flex flex-col justify-center">
           <div className="flex items-center space-x-3 text-gray-400 mb-2">

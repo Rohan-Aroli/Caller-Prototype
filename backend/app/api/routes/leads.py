@@ -1,3 +1,4 @@
+import csv
 import io
 import uuid
 import logging
@@ -96,22 +97,24 @@ async def upload_csv(
     # Peek at headers to decide processing strategy
     try:
         decoded_preview = content[:2048].decode("utf-8-sig", errors="replace")
-    except Exception:
-        decoded_preview = ""
+        preview_lines = [l for l in decoded_preview.splitlines() if l.strip()]
+        if preview_lines:
+            preview_reader = csv.reader(io.StringIO(preview_lines[0]))
+            header_row = next(preview_reader, [])
+            raw_headers = [h.strip().lower().replace(" ", "_").strip('"\'') for h in header_row]
+        else:
+            raw_headers = []
+    except Exception as e:
+        logger.warning(f"Error previewing CSV headers: {e}")
+        raw_headers = []
 
-    header_line = ""
-    for line in decoded_preview.splitlines():
-        if line.strip():
-            header_line = line
-            break
-
-    raw_headers = [h.strip().lower().replace(" ", "_") for h in header_line.split(",")]
-    is_calling_lead_csv = any(
+    # Detect if user included explicit 3rd column "reason for calling"
+    has_reason_column = any(
         h in ("reason_for_calling", "reason", "reason_for_call", "campaign_objective")
         for h in raw_headers
-    ) or ("number" in raw_headers and "phone" not in raw_headers)
+    )
 
-    if is_calling_lead_csv:
+    if has_reason_column:
         # Strict 3-column outbound campaign parsing
         file_obj = io.TextIOWrapper(io.BytesIO(content), encoding="utf-8-sig")
         batch_id = str(uuid.uuid4())
@@ -126,6 +129,7 @@ async def upload_csv(
 
         # Queue outbound calls for all leads
         for lead in leads:
+            logger.info(f"Queueing outbound call for {lead.name} ({lead.number})")
             background_tasks.add_task(trigger_single_lead_call, lead)
 
         accepted_leads = [
@@ -152,9 +156,43 @@ async def upload_csv(
             leads=leads
         )
     else:
-        # Standard legacy processing
+        # Standard processing (handles 2-column Name,Phone or Name,Phone,Course etc.)
         file_obj = io.TextIOWrapper(io.BytesIO(content), encoding="utf-8-sig")
-        return await run_in_threadpool(process_csv, file_obj, agent_id)
+        result = await run_in_threadpool(process_csv, file_obj, agent_id)
+
+        # For any accepted leads from standard CSV processing, also register and queue calls
+        if result.accepted_leads:
+            batch_id = str(uuid.uuid4())
+            leads = [
+                LeadRecord(
+                    id=str(uuid.uuid4()),
+                    batch_id=batch_id,
+                    name=item.name,
+                    number=item.phone,
+                    reason_for_calling=item.extra_fields.get("reason_for_calling")
+                        or item.extra_fields.get("reason")
+                        or item.extra_fields.get("course")
+                        or "Discuss our business partnership and investment opportunity",
+                    status="pending",
+                    retry_count=0
+                )
+                for item in result.accepted_leads
+            ]
+
+            for lead in leads:
+                await call_state_manager.register_lead(lead)
+
+            save_evaluated_leads_csv(batch_id, leads)
+
+            for lead in leads:
+                logger.info(f"Queueing outbound call for {lead.name} ({lead.number})")
+                background_tasks.add_task(trigger_single_lead_call, lead)
+
+            result.batch_id = batch_id
+            result.download_url = f"/api/v1/leads/download-results/{batch_id}"
+            result.leads = leads
+
+        return result
 
 @router.get("/download-results/{batch_id}")
 async def download_results(batch_id: str):

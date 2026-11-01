@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, FileType, AlertCircle, Loader2 } from 'lucide-react';
+import { UploadCloud, FileType, AlertCircle, Loader2, Download } from 'lucide-react';
 
 interface UploadFormProps {
   onUpload: (file: File, agentId: string) => Promise<void>;
@@ -8,7 +8,7 @@ interface UploadFormProps {
 
 export function UploadForm({ onUpload, loading }: UploadFormProps) {
   const [file, setFile] = useState<File | null>(null);
-  const [agentId, setAgentId] = useState<string>('');
+  const [agentId, setAgentId] = useState<string>('sales-agent-01');
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -56,6 +56,21 @@ export function UploadForm({ onUpload, loading }: UploadFormProps) {
     fileInputRef.current?.click();
   };
 
+  const downloadSampleCsv = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const sample = "name,number,reason for calling\n" +
+      "Rohan Sharma,+918310087758,Discuss enterprise AI telephony and partnership\n" +
+      "Alex Morgan,+14155552671,Review Series A investment opportunity\n";
+    const blob = new Blob([sample], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'sample_calling_leads.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!file) {
@@ -89,16 +104,27 @@ export function UploadForm({ onUpload, loading }: UploadFormProps) {
           id="agentId"
           value={agentId}
           onChange={(e) => setAgentId(e.target.value)}
-          placeholder="e.g. agt_12345"
+          placeholder="e.g. sales-agent-01"
           className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent transition-all"
           disabled={loading}
         />
       </div>
 
       <div className="space-y-2">
-        <label className="block text-sm font-medium text-gray-300">
-          Lead Data (CSV)
-        </label>
+        <div className="flex items-center justify-between">
+          <label className="block text-sm font-medium text-gray-300">
+            Lead Data (CSV)
+          </label>
+          <button
+            type="button"
+            onClick={downloadSampleCsv}
+            className="text-xs text-accent hover:underline flex items-center gap-1 font-medium transition-colors"
+          >
+            <Download size={14} />
+            Download Sample CSV
+          </button>
+        </div>
+
         <div
           className={`relative border-2 border-dashed rounded-xl p-8 transition-all ${
             dragActive
@@ -163,6 +189,10 @@ export function UploadForm({ onUpload, loading }: UploadFormProps) {
             )}
           </div>
         </div>
+
+        <p className="text-xs text-gray-400 mt-1">
+          Supported columns: <code className="text-gray-300 font-mono">name, number, reason for calling</code> or <code className="text-gray-300 font-mono">name, phone</code>
+        </p>
       </div>
 
       {error && (
@@ -184,10 +214,10 @@ export function UploadForm({ onUpload, loading }: UploadFormProps) {
         {loading ? (
           <>
             <Loader2 className="animate-spin" size={24} />
-            <span>Validating Leads...</span>
+            <span>Initiating Outbound Calling Campaign...</span>
           </>
         ) : (
-          <span>Validate Leads</span>
+          <span>Upload & Launch AI Calls</span>
         )}
       </button>
     </form>

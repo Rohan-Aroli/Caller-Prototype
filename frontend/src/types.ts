@@ -19,4 +19,7 @@ export interface CsvProcessingResponse {
   rejected_count: number;
   accepted_leads: AcceptedLead[];
   rejected_rows: RejectedRow[];
+  batch_id?: string;
+  download_url?: string;
+  leads?: any[];
 }
