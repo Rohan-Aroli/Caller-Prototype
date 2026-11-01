@@ -19,6 +19,7 @@ class Settings(BaseSettings):
 
     # AI & Speech Providers
     GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-3.5-flash-lite"  
     DEEPGRAM_API_KEY: str = ""
     DEEPGRAM_VOICE_MODEL: str = "aura-asteria-en"  # Natural Deepgram Aura voice
 

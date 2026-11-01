@@ -17,16 +17,26 @@ async def verify_twilio_request(request: Request) -> bool:
     """
     Validates that the incoming HTTP request actually originated from Twilio.
     Returns True if valid or if verification is turned off in settings.
+    Properly handles public reverse proxy domains (e.g. ngrok).
     """
     if not settings.VERIFY_TWILIO_SIGNATURE or not settings.TWILIO_AUTH_TOKEN:
         return True
 
     signature = request.headers.get("X-Twilio-Signature")
     if not signature:
+        logger.warning("Missing X-Twilio-Signature header on webhook request.")
         return False
 
     validator = RequestValidator(settings.TWILIO_AUTH_TOKEN)
-    url = str(request.url)
+
+    # If behind a public reverse proxy (e.g. ngrok), Twilio signed the public URL
+    if settings.SERVER_DOMAIN:
+        clean_domain = settings.SERVER_DOMAIN.replace("https://", "").replace("http://", "").strip("/")
+        url = f"https://{clean_domain}{request.url.path}"
+        if request.url.query:
+            url = f"{url}?{request.url.query}"
+    else:
+        url = str(request.url)
 
     # For POST requests, include the form body
     if request.method == "POST":
@@ -35,7 +45,10 @@ async def verify_twilio_request(request: Request) -> bool:
     else:
         params = dict(request.query_params)
 
-    return validator.validate(url, params, signature)
+    is_valid = validator.validate(url, params, signature)
+    if not is_valid:
+        logger.warning(f"Twilio signature validation failed for URL: {url}")
+    return is_valid
 
 @router.post("/trigger-call")
 async def trigger_call(request: CallRequest):

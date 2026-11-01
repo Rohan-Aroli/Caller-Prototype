@@ -15,6 +15,19 @@ from backend.app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_PREWARM_GREETING = (
+    "Hi there! Thanks for taking my call, I hope I'm catching you at a good time. "
+    "How are you doing today?"
+)
+
+SYSTEM_NEGOTIATION_PERSONA = (
+    "You are a confident, articulate, and charismatic business development representative and negotiator for our venture. "
+    "Your goal is to guide the conversation smoothly, build trust, understand their requirements, and persuasively negotiate "
+    "and convince them to invest in our business opportunities without sounding pushy, robotic, or overtly transactional. "
+    "Maintain a warm, conversational, concise, professional, and natural tone suitable for telephone speech "
+    "(strictly 1 to 2 short sentences per turn, no bullet points, no markdown formatting, no unpronounceable characters)."
+)
+
 class TwilioProvider:
     def __init__(self):
         # Initialize Google Generative AI client once if API key is present
@@ -51,13 +64,13 @@ class TwilioProvider:
         return call.sid
 
     async def _generate_llm_response(self, chat_session, user_text: str) -> str:
-        """Query standard Gemini Flash model via text prompting."""
+        """Query Gemini Flash model via text prompting."""
         try:
             response = await chat_session.send_message_async(user_text)
             return response.text.strip() if response and response.text else ""
         except Exception as e:
             logger.error(f"Gemini LLM error: {e}")
-            return "I apologize, I had trouble processing that. Could you please repeat?"
+            return "I hear you, and that makes sense. Could you share a bit more about what you're looking for?"
 
     async def _synthesize_and_stream_to_twilio(
         self,
@@ -108,11 +121,12 @@ class TwilioProvider:
 
     async def handle_media_stream(self, twilio_ws: WebSocket):
         """
-        Accepts Twilio WebSocket and runs a consolidated, 100% free pipeline:
-        1. STT: Streams Twilio 8kHz mu-law audio to Deepgram Live WebSocket (nova-2).
-        2. LLM: Triggers Gemini Flash REST upon speech_final / is_final detection.
-        3. TTS: Synthesizes response using Deepgram Aura TTS (aura-asteria-en) returning 8kHz mu-law.
-        4. Playback: Streams 160-byte packets directly to Twilio without intermediate conversions.
+        Accepts Twilio WebSocket and runs the outbound conversational voice pipeline:
+        1. Pre-warms the call by speaking the first greeting within milliseconds of pickup.
+        2. Configures Gemini with a persistent sales negotiation persona and dialogues state.
+        3. STT: Streams Twilio 8kHz mu-law audio to Deepgram Live WebSocket (nova-2).
+        4. LLM: Triggers Gemini upon speech_final / is_final detection.
+        5. TTS: Synthesizes response using Deepgram Aura (8kHz mu-law) and streams directly to Twilio.
         """
         await twilio_ws.accept()
 
@@ -127,22 +141,26 @@ class TwilioProvider:
             await twilio_ws.close(code=1008, reason="GEMINI_API_KEY is not configured.")
             return
 
-        # Initialize Clients
+        # Initialize Gemini Model with Negotiation Persona
         genai.configure(api_key=settings.GEMINI_API_KEY)
+        model_name = settings.GEMINI_MODEL or "gemini-3.1-flash-lite"
         model = genai.GenerativeModel(
-            model_name="gemini-3.5-flash-lite",
-            system_instruction=(
-                "You are an AI phone assistant for an inbound/outbound call. "
-                "Keep responses concise, natural, conversational, and direct (1-2 sentences), "
-                "suitable for spoken conversation over a phone call."
-            )
+            model_name=model_name,
+            system_instruction=SYSTEM_NEGOTIATION_PERSONA
         )
-        chat_session = model.start_chat(history=[])
+
+        # Prime conversation history with the initial pre-warm greeting so caller's reply is Turn #2
+        initial_history = [
+            {"role": "user", "parts": ["[The customer answers the phone call]"]},
+            {"role": "model", "parts": [DEFAULT_PREWARM_GREETING]}
+        ]
+        chat_session = model.start_chat(history=initial_history)
 
         dg_client = AsyncDeepgramClient(api_key=settings.DEEPGRAM_API_KEY)
         stream_sid: Optional[str] = None
         stream_ready = asyncio.Event()
         processing_lock = asyncio.Lock()
+        greeting_sent = False
 
         # Reusable async HTTP client for Deepgram Aura TTS requests
         async with httpx.AsyncClient(timeout=10.0) as http_client:
@@ -185,7 +203,7 @@ class TwilioProvider:
                                 async with processing_lock:
                                     if not stream_sid:
                                         return
-                                    # 1. Query Gemini text LLM
+                                    # 1. Query Gemini text LLM (receives reply as ongoing negotiation turn)
                                     reply_text = await self._generate_llm_response(chat_session, transcript)
                                     logger.info(f"AI Response: {reply_text}")
 
@@ -206,6 +224,27 @@ class TwilioProvider:
 
                     # Start Deepgram listener task
                     dg_listener_task = asyncio.create_task(dg_socket.start_listening())
+
+                    # Task to deliver pre-warm greeting immediately upon stream initialization
+                    async def play_prewarm_greeting():
+                        nonlocal greeting_sent
+                        try:
+                            await stream_ready.wait()
+                            async with processing_lock:
+                                if not greeting_sent and stream_sid:
+                                    greeting_sent = True
+                                    logger.info(f"Pre-warming call with first-speaker greeting: {DEFAULT_PREWARM_GREETING}")
+                                    await self._synthesize_and_stream_to_twilio(
+                                        DEFAULT_PREWARM_GREETING,
+                                        http_client,
+                                        twilio_ws,
+                                        stream_sid
+                                    )
+                        except Exception as e:
+                            logger.warning(f"Initial pre-warm greeting warning: {e}")
+
+                    # Run greeting as an independent background task so its completion does NOT kill the call
+                    asyncio.create_task(play_prewarm_greeting())
 
                     # Task to read audio from Twilio and pipe into Deepgram
                     async def twilio_to_deepgram():
@@ -235,7 +274,7 @@ class TwilioProvider:
 
                     twilio_task = asyncio.create_task(twilio_to_deepgram())
 
-                    # Wait until Twilio or Deepgram completes
+                    # Wait ONLY for the two long-lived streaming connections (Twilio or Deepgram disconnect)
                     done, pending = await asyncio.wait(
                         [twilio_task, dg_listener_task],
                         return_when=asyncio.FIRST_COMPLETED
