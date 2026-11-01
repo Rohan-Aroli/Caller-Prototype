@@ -1,9 +1,13 @@
 import csv
+import os
 import re
 import sys
-from typing import TextIO, List
+import uuid
+from pathlib import Path
+from typing import TextIO, List, Optional
 from fastapi import HTTPException
-from backend.app.schemas.leads import CsvProcessingResponse, AcceptedLead, RejectedRow
+from backend.app.schemas.leads import CsvProcessingResponse, AcceptedLead, RejectedRow, LeadRecord
+from backend.app.core.config import settings
 
 REQUIRED_HEADERS = {"name", "phone"}
 
@@ -30,7 +34,166 @@ def is_valid_phone(phone: str) -> bool:
     # E.164: + followed by 8-15 digits, first digit non-zero
     return bool(RE_E164.match(phone))
 
+def parse_leads_csv(file_obj: TextIO, batch_id: Optional[str] = None) -> List[LeadRecord]:
+    """
+    Parses and strictly validates a 3-column leads CSV for outbound calling:
+    Required columns: 'name', 'number' (or 'phone'), 'reason for calling' (or 'reason_for_calling').
+    Rejects with HTTP 422 if any required header is missing, or if any row
+    lacks one of these 3 fields or has an invalid E.164 phone number.
+    """
+    try:
+        reader = csv.reader(file_obj)
+        try:
+            raw_headers = next(reader)
+        except StopIteration:
+            raise HTTPException(status_code=422, detail="File is empty.")
+
+        if not raw_headers or all(not h.strip() for h in raw_headers):
+            raise HTTPException(status_code=422, detail="No headers found in CSV file.")
+
+        normalized_headers = [normalize_header(h) for h in raw_headers]
+
+        name_idx = None
+        number_idx = None
+        reason_idx = None
+
+        for idx, h in enumerate(normalized_headers):
+            if h in ("name", "full_name", "first_name"):
+                name_idx = idx
+            elif h in ("number", "phone", "phone_number", "mobile"):
+                number_idx = idx
+            elif h in ("reason_for_calling", "reason", "reason_for_call", "campaign_objective"):
+                reason_idx = idx
+
+        missing_fields = []
+        if name_idx is None:
+            missing_fields.append("name")
+        if number_idx is None:
+            missing_fields.append("number")
+        if reason_idx is None:
+            missing_fields.append("reason for calling")
+
+        if missing_fields:
+            raise HTTPException(
+                status_code=422,
+                detail=f"CSV missing required column(s): {', '.join(missing_fields)}. Required: 'name', 'number', 'reason for calling'."
+            )
+
+        header_count = len(normalized_headers)
+        leads: List[LeadRecord] = []
+        effective_batch_id = batch_id or str(uuid.uuid4())
+        row_number = 1  # Header was row 1
+
+        for row in reader:
+            row_number += 1
+            if not row or all(not cell.strip() for cell in row):
+                continue
+
+            if len(row) != header_count:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Row {row_number}: Expected {header_count} columns, but got {len(row)}."
+                )
+
+            name = row[name_idx].strip()
+            if not name:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Row {row_number}: Missing required field 'name'."
+                )
+
+            raw_number = row[number_idx].strip()
+            if not raw_number:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Row {row_number}: Missing required field 'number'."
+                )
+
+            number = normalize_phone(raw_number)
+            if not is_valid_phone(number):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Row {row_number}: Phone number '{raw_number}' is invalid. Must be in E.164 format."
+                )
+
+            reason = row[reason_idx].strip()
+            if not reason:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Row {row_number}: Missing required field 'reason for calling'."
+                )
+
+            leads.append(
+                LeadRecord(
+                    id=str(uuid.uuid4()),
+                    batch_id=effective_batch_id,
+                    name=name,
+                    number=number,
+                    reason_for_calling=reason,
+                    status="pending",
+                    retry_count=0
+                )
+            )
+
+        if not leads:
+            raise HTTPException(status_code=422, detail="CSV file contains no valid data rows.")
+
+        return leads
+
+    except HTTPException:
+        raise
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=422, detail="File must be UTF-8 encoded.")
+    except csv.Error as e:
+        raise HTTPException(status_code=422, detail=f"Malformed CSV: {str(e)}")
+
+def save_evaluated_leads_csv(batch_id: str, leads: List[LeadRecord]) -> Path:
+    """
+    Persists evaluated leads to a CSV in PROCESSED_CSV_DIR.
+    Ensures atomic write via temporary file replacement.
+    Preserves original columns ('name', 'number', 'reason for calling') and
+    appends 'Status', 'Retry_Count', 'Investment_Probability_Score', and 'Evaluation_Notes'.
+    """
+    output_dir = Path(settings.PROCESSED_CSV_DIR)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    target_path = output_dir / f"leads_evaluated_{batch_id}.csv"
+    tmp_path = output_dir / f".leads_evaluated_{batch_id}_{uuid.uuid4().hex}.tmp"
+
+    fieldnames = [
+        "name",
+        "number",
+        "reason for calling",
+        "Status",
+        "Retry_Count",
+        "Investment_Probability_Score",
+        "Evaluation_Notes"
+    ]
+
+    with open(tmp_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for lead in leads:
+            score_str = str(lead.investment_score) if lead.investment_score is not None else ""
+            writer.writerow({
+                "name": lead.name,
+                "number": lead.number,
+                "reason for calling": lead.reason_for_calling,
+                "Status": lead.status,
+                "Retry_Count": lead.retry_count,
+                "Investment_Probability_Score": score_str,
+                "Evaluation_Notes": lead.evaluation_notes or ""
+            })
+
+    # Atomic replace
+    tmp_path.replace(target_path)
+    return target_path
+
 def process_csv(file_obj: TextIO, agent_id: str) -> CsvProcessingResponse:
+    """
+    Legacy CSV processor used for agent assignment lead validation.
+    Maintained for complete backward compatibility.
+    """
     try:
         reader = csv.reader(file_obj)
         try:
@@ -119,6 +282,8 @@ def process_csv(file_obj: TextIO, agent_id: str) -> CsvProcessingResponse:
             rejected_rows=rejected_rows
         )
 
+    except HTTPException:
+        raise
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
     except csv.Error as e:

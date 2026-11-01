@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # AI & Speech Providers
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-3.5-flash-lite"  
+    GEMINI_MODEL: str = "gemini-2.0-flash"  # or gemini-2.5-flash / gemini-3.8-flash
     DEEPGRAM_API_KEY: str = ""
     DEEPGRAM_VOICE_MODEL: str = "aura-asteria-en"  # Natural Deepgram Aura voice
 
@@ -28,5 +28,14 @@ class Settings(BaseSettings):
 
     # Optional signature validation toggle (default True in production, can disable if testing locally without webhook signatures)
     VERIFY_TWILIO_SIGNATURE: bool = True
+
+    # Call automation, retries, and processed leads storage
+    CALL_RETRY_DELAY_SECONDS: int = 30
+    CALL_MAX_RETRIES: int = 1
+    PROCESSED_CSV_DIR: str = "backend/data/processed_leads"
+
+    @property
+    def TWILIO_PHONE_NUMBER(self) -> str:
+        return self.TWILIO_FROM_NUMBER
 
 settings = Settings()

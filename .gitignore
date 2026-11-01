@@ -86,3 +86,7 @@ yarn-error.log*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Processed leads and runtime data
+backend/data/processed_leads/*.csv
+!backend/data/processed_leads/.gitkeep
